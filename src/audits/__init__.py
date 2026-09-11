@@ -2,6 +2,14 @@
 
 from src.audits.crawl_render import audit_crawl_render
 from src.audits.audit_request import AuditContext, AuditRequest
+from src.audits.evidence_consistency import (
+    ConsistencyClassification,
+    EvidenceUnit,
+    FactInventory,
+    audit_evidence_consistency,
+    build_fact_inventory,
+    classify_consistency,
+)
 from src.audits.finding_aggregator import aggregate_findings, deduplicate_findings, sort_findings, tag_findings
 from src.audits.freshness_corroboration import audit_freshness_corroboration
 from src.audits.machine_answerability import audit_machine_answerability
@@ -15,17 +23,23 @@ __all__ = [
     "AuditContext",
     "AuditReport",
     "AuditRequest",
+    "ConsistencyClassification",
+    "EvidenceUnit",
+    "FactInventory",
     "Finding",
     "ObjectiveMapping",
     "PriorityEngine",
     "PrioritySignal",
     "SuggestedAction",
-    "audit_crawl_render",
     "aggregate_findings",
+    "audit_crawl_render",
+    "audit_evidence_consistency",
     "audit_freshness_corroboration",
     "audit_machine_answerability",
     "audit_task_readiness",
+    "build_fact_inventory",
     "build_report",
+    "classify_consistency",
     "collect_signals",
     "compute_priorities",
     "deduplicate_findings",
