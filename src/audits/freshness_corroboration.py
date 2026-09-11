@@ -37,6 +37,22 @@ STANDARD_ATTRIBUTES: frozenset[str] = frozenset({
     "model",
 })
 
+# JSON-LD entity types that name the page's *content entity* (Product, Article, ...).
+# Document/site-level types (Organization, WebSite, WebPage, BreadcrumbList, Person)
+# describe the site owner or the document itself; comparing their names against the
+# visible headline would flag every Wikipedia article against its Wikimedia
+# Organization schema.
+PRIMARY_ENTITY_TYPES: frozenset[str] = frozenset({
+    "product",
+    "event",
+    "course",
+    "recipe",
+    "article",
+    "newsarticle",
+    "service",
+    "softwareapplication",
+})
+
 
 def _collect_json_ld_entities(obs: PageObservation) -> list[dict[str, Any]]:
     """Traverse all valid JSON-LD blocks to gather entity dictionaries."""
@@ -328,9 +344,17 @@ def _check_entity_ambiguity(obs: PageObservation) -> list[Finding]:
     visible_brand = visible_brand_match.group(1).strip() if visible_brand_match else ""
 
     for entity in entities:
+        raw_type = entity.get("@type")
+        if isinstance(raw_type, list):
+            is_primary_entity = any(str(t).lower() in PRIMARY_ENTITY_TYPES for t in raw_type)
+        elif isinstance(raw_type, str):
+            is_primary_entity = raw_type.lower() in PRIMARY_ENTITY_TYPES
+        else:
+            is_primary_entity = False
+
         # 1. Product Name Identity Conflict
         raw_name = entity.get("name")
-        if isinstance(raw_name, str) and visible_headline:
+        if is_primary_entity and isinstance(raw_name, str) and visible_headline:
             json_name = raw_name.strip()
             # Extract significant tokens of length >= 4
             json_tokens = {w.lower() for w in re.findall(r"\b[A-Za-z0-9]{4,}\b", json_name)}

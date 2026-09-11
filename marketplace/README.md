@@ -42,6 +42,7 @@ Audit Orchestrator (entrypoint)
   ├─ machine-answerability-audit      FIND / READ / UNDERSTAND
   ├─ task-readiness-audit             DECIDE / ARRIVE
   ├─ engagement-audit                 CONTINUE THE TASK
+  ├─ evidence-consistency-audit       EVIDENCE / TRUST
   └─ freshness-corroboration          TRUST
   ↓
 Aggregation        conservative dedup + priority ordering (source-tagged)
@@ -57,6 +58,7 @@ Reporting         final structured JSON report
 | `machine-answerability-audit` | FIND / READ / UNDERSTAND | Can key information be extracted and understood? |
 | `task-readiness-audit` | DECIDE / ARRIVE | Can the task actually be executed? |
 | `engagement-audit` | CONTINUE THE TASK | Does the page orient and continue the referred visitor? |
+| `evidence-consistency-audit` | EVIDENCE / TRUST | Shared evidence/provenance classification (MATCH / CONFLICT / AMBIGUOUS) behind trustworthy facts |
 | `freshness-corroboration` | TRUST | Are representations consistent and time-sensitive facts current? |
 | `crawl-render-audit` | FIND / READ / TRUST | Reachability, protocol delivery, and client-side render accessibility |
 

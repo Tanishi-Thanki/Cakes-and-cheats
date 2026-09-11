@@ -500,22 +500,41 @@ def _iter_json_ld_entities(obs: PageObservation) -> Iterator[dict[str, Any]]:
                 stack.extend(item)
 
 
+# Entity types that can identify a page's primary entity (used to resolve a
+# primary entity label when JSON-LD is present).
+PRIMARY_ENTITY_TYPES: frozenset[str] = frozenset({
+    "product",
+    "service",
+    "softwareapplication",
+    "organization",
+    "event",
+    "course",
+    "recipe",
+    "article",
+    "newsarticle",
+    "brand",
+})
+
+# Entity types whose `name` constitutes primary-entity name evidence. Explicitly
+# excludes nested container entities such as `brand`, whose name belongs to the
+# `brand` attribute group, never to the primary entity's `name` group.
+NAME_EVIDENCE_TYPES: frozenset[str] = frozenset({
+    "product",
+    "service",
+    "softwareapplication",
+    "organization",
+    "event",
+    "course",
+    "recipe",
+    "article",
+    "newsarticle",
+})
+
+
 def _resolve_primary_entity(obs: PageObservation) -> str:
-    target_types = {
-        "product",
-        "service",
-        "softwareapplication",
-        "organization",
-        "event",
-        "course",
-        "recipe",
-        "article",
-        "newsarticle",
-        "brand",
-    }
     for entity in _iter_json_ld_entities(obs):
         raw_type = str(entity.get("@type") or "").lower()
-        if raw_type in target_types:
+        if raw_type in PRIMARY_ENTITY_TYPES:
             name = entity.get("name")
             if isinstance(name, str) and name.strip():
                 return name.strip()
@@ -878,6 +897,13 @@ def build_fact_inventory(
 
         seen_json_name: set[str] = set()
         for entity_dict in _iter_json_ld_entities(obs):
+            # Only dicts that canonically represent the primary entity contribute
+            # name evidence. Nested container entities (e.g. Brand, Offer) carry
+            # their own `name` keys and must never be attributed to the product's
+            # `name` group: doing so lets a shared token (e.g. brand == product
+            # name token) mask a genuine identity conflict (EVID-ENT-001).
+            if str(entity_dict.get("@type") or "").lower() not in NAME_EVIDENCE_TYPES:
+                continue
             name = _extract_json_ld_entity_name(entity_dict)
             if name and name not in seen_json_name:
                 seen_json_name.add(name)
@@ -1184,6 +1210,17 @@ def classify_consistency(
             units=tuple(filtered),
             normalized_values=tuple(nv for _, nv in normalized),
             reason="older dated value differs from a newer/undated value",
+        )
+
+    provenance_pairs = {(u.source, u.source_type) for u, _ in normalized}
+    if len(provenance_pairs) < 2:
+        return ConsistencyResult(
+            entity=result_entity,
+            attribute=result_attr,
+            classification="AMBIGUOUS",
+            units=tuple(filtered),
+            normalized_values=tuple(nv for _, nv in normalized),
+            reason="single-representation multi-value group cannot be attributed to one context",
         )
 
     return ConsistencyResult(

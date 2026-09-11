@@ -547,5 +547,65 @@ class TestFreshnessCorroborationAudit(unittest.TestCase):
         self.assertEqual(f.priority, 3)
 
 
+    def test_tn11_wikipedia_site_level_organization_not_entity_conflict(self) -> None:
+        """TN 11: site-level Organization schema (Wikipedia) is not compared to the headline.
+
+        Regression: Wikipedia emits Article + author/publisher Organization entities on
+        every article. FC-ENT-001 previously compared the visible headline against the
+        Organization names ('Contributors to Wikimedia projects') and flagged every
+        article page. Only primary content entities (Article/Product/...) may be
+        compared against the visible identity.
+        """
+        html = """
+        <html>
+        <head>
+            <title>Artificial intelligence - Wikipedia</title>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@graph": [
+                    {"@type": "Article", "headline": "Artificial intelligence", "name": "Artificial intelligence"},
+                    {"@type": "Organization", "name": "Contributors to Wikimedia projects"},
+                    {"@type": "Organization", "name": "Wikimedia Foundation, Inc."}
+                ]
+            }
+            </script>
+        </head>
+        <body>
+            <h1>Artificial intelligence</h1>
+            <p>Artificial intelligence is intelligence demonstrated by machines, in
+            contrast to the natural intelligence displayed by humans.</p>
+        </body>
+        </html>
+        """
+        obs = observe_html(html)
+        findings = audit_freshness_corroboration(obs)
+        self.assertEqual([f for f in findings if f.id.startswith("FC-ENT")], [])
+
+    def test_tn12_organization_homepage_branding_not_entity_conflict(self) -> None:
+        """TN 12: Organization homepage branding headline is not an entity-identity conflict."""
+        html = """
+        <html>
+        <head>
+            <title>Welcome to Acme</title>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "Organization",
+                "name": "Acme Corporation"
+            }
+            </script>
+        </head>
+        <body>
+            <h1>Innovative Solutions for Tomorrow</h1>
+            <p>We build productivity software for modern teams.</p>
+        </body>
+        </html>
+        """
+        obs = observe_html(html)
+        findings = audit_freshness_corroboration(obs)
+        self.assertEqual([f for f in findings if f.id.startswith("FC-ENT")], [])
+
+
 if __name__ == "__main__":
     unittest.main()

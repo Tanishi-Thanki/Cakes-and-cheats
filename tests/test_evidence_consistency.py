@@ -355,6 +355,89 @@ class TestEvidenceConsistencyAudit(unittest.TestCase):
             self.assertIsInstance(result, list)
             self.assertTrue(all(isinstance(f, Finding) for f in result))
 
+    def test_18_nested_brand_name_does_not_pollute_product_name_group(self) -> None:
+        """Test 18: a nested Brand object's name must not join the product name group.
+
+        Regression: _iter_json_ld_entities() yields nested dicts (offers, brand, ...).
+        build_fact_inventory() previously recorded the Brand dict's name as a unit of
+        the product's 'name' attribute. Because the brand name shares a significant
+        token with the JSON-LD product name, _identity_classification short-circuited
+        to MATCH, silently suppressing a genuine entity-identity conflict
+        (EVID-ENT-001) that the audit is contractually required to report.
+        """
+        html = """<!DOCTYPE html><html><head><title>Acme Running Shoes</title>
+        <script type="application/ld+json">
+        {"@context":"https://schema.org","@type":"Product","name":"Beta Footwear Ultra",
+         "brand":{"@type":"Brand","name":"Beta"},
+         "offers":{"@type":"Offer","price":"949","priceCurrency":"USD"}}
+        </script>
+        </head><body><h1>Acme Running Shoes</h1><p>$999</p></body></html>"""
+        obs = observe_html(html, requested_url="https://site.test/p")
+
+        inv = build_fact_inventory(obs)
+        name_group = [(a, [u.value for u in units]) for (_, a), units in inv.groups() if a == "name"]
+        self.assertEqual(len(name_group), 1)
+        self.assertEqual(
+            name_group[0][1],
+            ["Beta Footwear Ultra", "Acme Running Shoes"],
+            "Brand name 'Beta' must not appear in the product name evidence group",
+        )
+
+        findings = audit_evidence_consistency(obs)
+        self.assertIn("EVID-ENT-001", [f.id for f in findings])
+
+    def test_19_multi_visible_prices_on_catalog_listing_not_a_conflict(self) -> None:
+        """Test 19: many prices from ONE representation/page (catalog listing) -> AMBIGUOUS, not CONFLICT.
+
+        Regression: a catalog listing emits one price per product, all sharing identical
+        provenance (same source, source_type='visible_text'), inside a single
+        primary-entity group. classify_consistency previously reported this as a HIGH
+        EVID-PRC-001 'same-context' conflict across different products. Disagreement is
+        only meaningful across representations or pages, so a single-representation
+        multi-value group must classify as AMBIGUOUS and produce no finding.
+        """
+        listing = """<!DOCTYPE html><html><head><title>All products | Books to Scrape - Sandbox</title></head>
+        <body>
+            <h1>All products</h1>
+            <p>A Light in the Attic</p><p>£51.77</p>
+            <p>Tipping the Velvet</p><p>£53.74</p>
+            <p>Soumission</p><p>£50.10</p>
+        </body></html>"""
+        obs = observe_html(listing, requested_url="https://books.test/index.html")
+
+        prices = [r for r in classify_inventory(build_fact_inventory(obs)) if r.attribute == "price"]
+        self.assertEqual(len(prices), 1)
+        self.assertEqual(prices[0].classification, "AMBIGUOUS")
+        self.assertNotIn("EVID-PRC-001", [f.id for f in audit_evidence_consistency(obs)])
+
+        control = """<!DOCTYPE html><html><head><title>All products | Books to Scrape - Sandbox</title>
+        <script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"All products","offers":{"price":"949","priceCurrency":"GBP"}}</script>
+        </head>
+        <body>
+            <h1>All products</h1>
+            <p>A Light in the Attic</p><p>£51.77</p>
+            <p>Tipping the Velvet</p><p>£53.74</p>
+            <p>Soumission</p><p>£50.10</p>
+        </body></html>"""
+        obs_control = observe_html(control, requested_url="https://books.test/index.html")
+        self.assertIn("EVID-PRC-001", [f.id for f in audit_evidence_consistency(obs_control)])
+
+    def test_20_multi_visible_prices_never_conflict_across_entities(self) -> None:
+        """Test 20: classification guard also applies when prices share one representation."""
+        units = [
+            _unit("Catalog", "price", "$10", "https://site.test/catalog", "visible_text"),
+            _unit("Catalog", "price", "$20", "https://site.test/catalog", "visible_text"),
+            _unit("Catalog", "price", "$30", "https://site.test/catalog", "visible_text"),
+        ]
+        res = classify_consistency(units, entity="Catalog", attribute="price")
+        self.assertEqual(res.classification, "AMBIGUOUS")
+
+        across_rep = units + [
+            _unit("Catalog", "price", "$25", "https://site.test/catalog", "json_ld"),
+        ]
+        res2 = classify_consistency(across_rep, entity="Catalog", attribute="price")
+        self.assertEqual(res2.classification, "CONFLICT")
+
 
 if __name__ == "__main__":
     unittest.main()
