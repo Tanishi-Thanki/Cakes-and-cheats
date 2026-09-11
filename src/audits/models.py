@@ -8,6 +8,15 @@ from typing import Any, Literal
 SeverityLevel = Literal["critical", "high", "medium", "low"]
 ConfidenceLevel = Literal["high", "medium", "low"]
 
+# Deterministic ordering for severity tie-breaks (lower = more severe).
+# Shared by every layer that ranks findings; defined once to prevent drift.
+SEVERITY_ORDER: dict[str, int] = {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+}
+
 
 @dataclass(frozen=True)
 class SuggestedAction:
@@ -45,3 +54,4 @@ class Finding:
     priority: int
     confidence: ConfidenceLevel = "medium"
     details: dict[str, Any] = field(default_factory=dict)
+    source_audit: str = ""
