@@ -1,5 +1,6 @@
-"""Audit layer for evaluating machine answerability, discovery, and task readiness."""
+"""Audit layer for evaluating machine answerability, discovery, task readiness, and crawlability."""
 
+from src.audits.crawl_render import audit_crawl_render
 from src.audits.audit_request import AuditContext, AuditRequest
 from src.audits.finding_aggregator import aggregate_findings, deduplicate_findings, sort_findings, tag_findings
 from src.audits.freshness_corroboration import audit_freshness_corroboration
@@ -19,6 +20,7 @@ __all__ = [
     "PriorityEngine",
     "PrioritySignal",
     "SuggestedAction",
+    "audit_crawl_render",
     "aggregate_findings",
     "audit_freshness_corroboration",
     "audit_machine_answerability",
