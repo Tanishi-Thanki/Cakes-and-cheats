@@ -720,5 +720,62 @@ class TestFindingSorting(unittest.TestCase):
         self.assertEqual(result[2].severity, "medium")
 
 
+
+# ---------------------------------------------------------------------------
+# Test 19: crawl_render is registered as an optional audit
+# ---------------------------------------------------------------------------
+
+class TestCrawlRenderOptionalRegistration(unittest.TestCase):
+    """Test 19 — crawl_render is reachable as an optional audit, not a default."""
+
+    def test_crawl_render_not_in_default_audits(self) -> None:
+        """Test 19a: 'crawl_render' must NOT appear in _DEFAULT_AUDITS (it is optional)."""
+        self.assertNotIn("crawl_render", _DEFAULT_AUDITS)
+
+    def test_crawl_render_in_registry_after_optional_registration(self) -> None:
+        """Test 19b: After optional audits are registered, 'crawl_render' is in AUDIT_REGISTRY
+        and maps to a callable.
+
+        The lazy-registration guard is reset here to force re-evaluation, then
+        restored to avoid leaking state into subsequent tests.
+        """
+        import src.orchestrator as _orch
+
+        original_flag = _orch._optional_audits_registered
+        _orch._optional_audits_registered = False
+
+        try:
+            _orch._ensure_optional_audits_registered()
+            self.assertIn(
+                "crawl_render",
+                AUDIT_REGISTRY,
+                "'crawl_render' must be present in AUDIT_REGISTRY after optional registration.",
+            )
+            self.assertTrue(
+                callable(AUDIT_REGISTRY["crawl_render"]),
+                "AUDIT_REGISTRY['crawl_render'] must be callable.",
+            )
+        finally:
+            _orch._optional_audits_registered = original_flag
+
+    def test_crawl_render_callable_invocable_via_registry(self) -> None:
+        """Test 19c: The registered crawl_render callable accepts a PageObservation and
+        returns a list without raising.  Uses a minimal successful observation.
+        """
+        import src.orchestrator as _orch
+
+        original_flag = _orch._optional_audits_registered
+        _orch._optional_audits_registered = False
+
+        try:
+            _orch._ensure_optional_audits_registered()
+            fn = AUDIT_REGISTRY["crawl_render"]
+            obs = _make_observation()
+            result = fn(obs)
+            self.assertIsInstance(result, list)
+        finally:
+            _orch._optional_audits_registered = original_flag
+
+
 if __name__ == "__main__":
     unittest.main()
