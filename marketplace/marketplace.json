@@ -1,0 +1,71 @@
+{
+  "id": "machine-answerability-audit-skills",
+  "name": "Machine Answerability Audit Skills",
+  "version": "1.0.0",
+  "description": "A provider-neutral, deterministic audit skill marketplace that evaluates how well an AI agent can find, read, understand, trust, act upon, and continue a task on any website.",
+  "entrypoint": "skills/audit-orchestrator/SKILL.md",
+  "runtime": {
+    "language": "python",
+    "version": ">=3.10",
+    "packages": ["beautifulsoup4", "requests"],
+    "network": "one read-only HTTP GET per audited URL",
+    "external_services": [],
+    "databases": [],
+    "browser_automation": "none"
+  },
+  "principles": {
+    "provider_neutral": true,
+    "generalizable_across_industries": true,
+    "deterministic_output": true,
+    "evidence_before_inference": true,
+    "no_llm_dependency": true,
+    "read_only": true
+  },
+  "skills": [
+    {
+      "id": "audit-orchestrator",
+      "name": "Audit Orchestrator",
+      "path": "skills/audit-orchestrator/SKILL.md",
+      "status": "available",
+      "role": "entrypoint",
+      "description": "Single composition and entrypoint layer: fetch once, observe once, compose the registered audits, aggregate and deduplicate findings conservatively, and emit the final structured report."
+    },
+    {
+      "id": "machine-answerability-audit",
+      "name": "Machine Answerability Audit",
+      "path": "skills/machine-answerability-audit/SKILL.md",
+      "status": "available",
+      "role": "audit"
+    },
+    {
+      "id": "task-readiness-audit",
+      "name": "Task Readiness Audit",
+      "path": "skills/task-readiness-audit/SKILL.md",
+      "status": "available",
+      "role": "audit"
+    },
+    {
+      "id": "engagement-audit",
+      "name": "Engagement Audit",
+      "path": "skills/engagement-audit/SKILL.md",
+      "status": "available",
+      "role": "audit"
+    },
+    {
+      "id": "freshness-corroboration",
+      "name": "Freshness & Corroboration Audit",
+      "path": "skills/freshness-corroboration/SKILL.md",
+      "status": "available",
+      "role": "audit"
+    },
+    {
+      "id": "crawl-render-audit",
+      "name": "Crawl / Render Audit",
+      "path": "skills/crawl-render-audit/SKILL.md",
+      "status": "planned",
+      "role": "audit",
+      "note": "PENDING — not yet implemented or registered in the orchestrator. The read-only crawler foundation exists; the audit rule set and rendering-layer checks are planned."
+    }
+  ],
+  "note": "Skill list reflects current implementation state. Skills marked 'planned' are placeholders that are not registered in the audit orchestrator and must not be invoked until implemented."
+}

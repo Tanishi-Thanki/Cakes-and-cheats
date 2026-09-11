@@ -7,7 +7,7 @@ from src.audits.machine_answerability import audit_machine_answerability
 from src.audits.models import Finding, SuggestedAction
 from src.audits.objective_mapping import ObjectiveMapping, map_findings_to_objectives
 from src.audits.priority_engine import PriorityEngine, PrioritySignal, collect_signals, compute_priorities
-from src.audits.reporting import AuditReport, build_report
+from src.audits.reporting import AuditReport, build_report, report_to_json
 from src.audits.task_readiness import audit_task_readiness
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "compute_priorities",
     "deduplicate_findings",
     "map_findings_to_objectives",
+    "report_to_json",
     "sort_findings",
     "tag_findings",
 ]
