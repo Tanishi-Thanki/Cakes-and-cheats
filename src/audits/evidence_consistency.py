@@ -202,7 +202,7 @@ class FactInventory:
 
 # Currency symbol/amount shapes (aligned with the existing audit regexes).
 _CURRENCY = r"(?:₹|Rs\.?|\$|€|£|USD|INR|EUR|GBP)"
-_AMOUNT = r"([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)"
+_AMOUNT = r"([0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)"
 
 PRICE_REGEX: re.Pattern[str] = re.compile(rf"{_CURRENCY}\s*{_AMOUNT}", re.IGNORECASE)
 PRICE_RANGE_REGEX: re.Pattern[str] = re.compile(

@@ -75,13 +75,18 @@ def _ensure_optional_audits_registered() -> None:
     try:
         from src.audits.crawl_render import audit_crawl_render
         from src.audits.engagement import audit_engagement
+        from src.audits.evidence_consistency import audit_evidence_consistency
         from src.audits.freshness_corroboration import audit_freshness_corroboration
 
         AUDIT_REGISTRY["crawl_render"] = lambda obs: audit_crawl_render(obs)
         AUDIT_REGISTRY["engagement"] = lambda obs: audit_engagement(obs)
+        AUDIT_REGISTRY["evidence_consistency"] = lambda obs: audit_evidence_consistency(obs)
         AUDIT_REGISTRY["freshness_corroboration"] = lambda obs: audit_freshness_corroboration(obs)
     except ImportError:
-        logger.debug("Optional audits (crawl_render, engagement, freshness_corroboration) not available.")
+        logger.debug(
+            "Optional audits (crawl_render, engagement, evidence_consistency, "
+            "freshness_corroboration) not available."
+        )
     _optional_audits_registered = True
 
 

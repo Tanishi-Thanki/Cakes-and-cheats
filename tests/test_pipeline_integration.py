@@ -1,7 +1,8 @@
 """Focused integration tests exercising the REAL P1/P2 audit modules end-to-end.
 
 Each test drives actual audit code (crawl_render, engagement, task_readiness,
-machine_answerability, freshness_corroboration) through the real integration chain:
+machine_answerability, freshness_corroboration, evidence_consistency) through
+the real integration chain:
 
     audit -> tag_findings -> aggregate/deduplicate -> build_report -> final JSON
 
@@ -18,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 from src.audits.crawl_render import audit_crawl_render
 from src.audits.engagement import audit_engagement
+from src.audits.evidence_consistency import audit_evidence_consistency
 from src.audits.finding_aggregator import aggregate_findings, tag_findings
 from src.audits.freshness_corroboration import audit_freshness_corroboration
 from src.audits.machine_answerability import audit_machine_answerability
@@ -32,6 +34,7 @@ ALL_REGISTERED_AUDITS = (
     "task_readiness",
     "crawl_render",
     "engagement",
+    "evidence_consistency",
     "freshness_corroboration",
 )
 
@@ -406,6 +409,109 @@ class TestRealOrchestratorPipeline(unittest.TestCase):
         self.assertEqual(d["summary"]["total_findings"], 0)
         self.assertEqual(d["findings"], [])
         json.loads(report.to_json())
+
+
+class TestEvidenceConsistencyThroughFullChain(unittest.TestCase):
+    """EVID findings flow through aggregation, mapping, priority, and JSON."""
+
+    _CONFLICT_HTML = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Acme Running Shoes</title>
+        <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "Product",
+            "name": "Acme Running Shoes",
+            "offers": {"@type": "Offer", "price": 949, "priceCurrency": "USD"}
+        }
+        </script>
+    </head>
+    <body>
+        <h1>Acme Running Shoes</h1>
+        <p>Buy the Acme Running Shoes for $999 with free shipping.</p>
+    </body>
+    </html>
+    """
+
+    def _mock_fetch(self, html: str, target_url: str) -> None:
+        response = MagicMock()
+        response.status_code = 200
+        response.url = target_url
+        response.headers = {"Content-Type": "text/html; charset=utf-8"}
+        response.text = html
+        self._mock_get.return_value = response
+
+    def test_evid_price_conflict_survives_chain_to_json(self) -> None:
+        obs = _observe(self._CONFLICT_HTML)
+        raw = audit_evidence_consistency(obs)
+        self.assertEqual([f.id for f in raw], ["EVID-PRC-001"])
+
+        final = _final_report(tag_findings(raw, "evidence_consistency"), ["evidence_consistency"])
+        f = final["findings"][0]
+        self.assertEqual(f["id"], "EVID-PRC-001")
+        self.assertEqual(f["source_audit"], "evidence_consistency")
+        self.assertEqual(f["severity"], "high")
+        self.assertEqual(f["priority"], 1)
+        self.assertEqual(f["confidence"], "high")
+        self.assertIsInstance(f["details"]["evidence_units"], list)
+
+    @patch("src.crawler.crawler.requests.get")
+    def test_evid_price_conflict_reaches_mapping_priority_and_report(self, mock_get: MagicMock) -> None:
+        self._mock_get = mock_get
+        self._mock_fetch(self._CONFLICT_HTML, "https://example.com/shoes")
+        from src.orchestrator import AuditOptions, run_audit_full
+        result, report = run_audit_full(
+            "https://example.com/shoes",
+            AuditOptions(audits=("evidence_consistency",)),
+        )
+        self.assertTrue(result.is_success)
+        self.assertEqual(list(result.options.audits), ["evidence_consistency"])
+        self.assertEqual([f.id for f in result.findings], ["EVID-PRC-001"])
+
+        mappings = report.as_dict()["objective_mappings"]
+        self.assertEqual([m["finding_id"] for m in mappings], ["EVID-PRC-001"])
+        self.assertEqual([m["source_audit"] for m in mappings], ["evidence_consistency"])
+
+        signals = report.as_dict()["priority_signals"]
+        signal = next(s for s in signals if s["finding_id"] == "EVID-PRC-001")
+        self.assertEqual(signal["priority"], 1)
+        self.assertEqual(signal["severity"], "high")
+        self.assertEqual(signal["source_audit"], "evidence_consistency")
+
+        d = report.as_final_dict()
+        self.assertEqual(d["summary"]["total_findings"], 1)
+        self.assertEqual(d["summary"]["high"], 1)
+        f = d["findings"][0]
+        self.assertEqual(f["id"], "EVID-PRC-001")
+        self.assertEqual(f["source_audit"], "evidence_consistency")
+        self.assertIn("evidence_units", f["details"])
+        json.loads(report.to_json())
+
+    @patch("src.crawler.crawler.requests.get")
+    def test_matching_prices_produce_no_evid_finding(self, mock_get: MagicMock) -> None:
+        self._mock_get = mock_get
+        match_html = self._CONFLICT_HTML.replace("$999", "$949")
+        self._mock_fetch(match_html, "https://example.com/shoes")
+        from src.orchestrator import AuditOptions, run_audit_full
+        result, report = run_audit_full(
+            "https://example.com/shoes",
+            AuditOptions(audits=("evidence_consistency",)),
+        )
+        self.assertTrue(result.is_success)
+        self.assertEqual(result.findings, [])
+        d = report.as_final_dict()
+        self.assertEqual(d["summary"]["total_findings"], 0)
+        self.assertEqual(d["findings"], [])
+        json.loads(report.to_json())
+
+    def test_evidence_consistency_registered_as_optional(self) -> None:
+        from src.orchestrator import AUDIT_REGISTRY, _ensure_optional_audits_registered
+
+        _ensure_optional_audits_registered()
+        self.assertIn("evidence_consistency", AUDIT_REGISTRY)
+        self.assertTrue(callable(AUDIT_REGISTRY["evidence_consistency"]))
 
 
 if __name__ == "__main__":

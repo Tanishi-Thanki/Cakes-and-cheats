@@ -59,6 +59,15 @@
       "role": "audit"
     },
     {
+      "id": "evidence-consistency-audit",
+      "name": "Evidence & Consistency Audit",
+      "path": "skills/evidence-consistency-audit/SKILL.md",
+      "status": "available",
+      "role": "audit",
+      "description": "Extracts and preserves provider-neutral evidence facts (price, availability, name, brand, dates, attributes) into a shared FactInventory, then classifies each evidence group across representations (MATCH/CONFLICT/HISTORICAL/AMBIGUOUS/INSUFFICIENT_EVIDENCE), reporting only meaningful conflicts.",
+      "note": "Implemented in src/audits/evidence_consistency.py and registered in the orchestrator under 'evidence_consistency' (optional audit, selected by name)."
+    },
+    {
       "id": "crawl-render-audit",
       "name": "Crawl / Render Audit",
       "path": "skills/crawl-render-audit/SKILL.md",
