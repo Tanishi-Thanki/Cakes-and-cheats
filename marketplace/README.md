@@ -58,7 +58,7 @@ Reporting         final structured JSON report
 | `task-readiness-audit` | DECIDE / ARRIVE | Can the task actually be executed? |
 | `engagement-audit` | CONTINUE THE TASK | Does the page orient and continue the referred visitor? |
 | `freshness-corroboration` | TRUST | Are representations consistent and time-sensitive facts current? |
-| `crawl-render-audit` | FIND / READ / TRUST | Reachability, protocol delivery, and client-side render accessibility |
+| `crawl-render-audit` | *(planned)* | Reachability and client-side render accessibility |
 
 Each audit skill is a thin, self-contained specification consuming the same `PageObservation`
 and emitting `Finding` objects. Skills do not depend on one another.

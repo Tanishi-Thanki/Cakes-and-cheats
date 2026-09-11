@@ -1,89 +1,54 @@
 ---
 name: Crawl / Render Audit
-status: available
-description: Evaluates whether technical delivery, accessibility, or rendering characteristics prevent automated agents and AI crawlers from reliably accessing and extracting website content from the delivered representation. Consumes the shared PageObservation; emits Finding objects.
+status: planned
+description: PLACEHOLDER - PENDING IMPLEMENTATION. Intended to evaluate whether a page is reachable and accessible to automated agents and whether its content survives client-side rendering. Not yet implemented. Do NOT invoke.
 ---
 
 # Crawl / Render Audit
 
-> **STATUS: AVAILABLE — IMPLEMENTED**
+> **STATUS: PENDING — NOT IMPLEMENTED**
 >
-> Implemented in `src/audits/crawl_render.py` as `audit_crawl_render(obs) -> list[Finding]`
-> and registered in the orchestrator under the stable name `crawl_render` (optional audit,
-> selected via `AuditOptions.audits` / `AuditRequest.audits`).
+> This skill is a **placeholder for the planned Crawl / Render Audit**. At the time of
+> writing it is **not implemented** and is **not registered** in the audit orchestrator.
+> It must **not be invoked** and must **not be presented as available**.
 
-## Purpose
+## Intended Purpose
 
-Answers the question: *"Is there evidence that important website content may be difficult for
-an AI crawler/agent to discover, access, or extract from the delivered representation?"*
+When implemented, this skill is expected to evaluate:
 
-It is **not a generic SEO checker** — it focuses on genuine discovery/access/rendering barriers
-for automated consumers, using only evidence available in the shared `PageObservation`.
+- **Reachability**: whether the URL is fetched successfully (HTTP status, HTML content type,
+  redirect resolution, error messages).
+- **Accessibility to agents**: non-HTML responses, blocked/broken fetches, and pathway errors.
+- **Client-side rendering**: whether substantive content appears to require JavaScript execution
+  to be available to automated consumers.
 
-## Problem Detected
+## Current Foundation (exists, but this is NOT the audit itself)
 
-- Pages that are unreachable or delivered with access failures (4xx/5xx, network/connection errors).
-- Initial HTML containing little extractable content despite meaningful structural shell
-  (headings/links/images), indicating substantive content may depend on client-side execution.
-- Redirects that downgrade a secure `https` request to plaintext `http`.
-- Invalid or malformed canonical declarations that misdirect authority.
+The read-only crawler (`src/crawler/crawler.py`) already provides:
 
-## Inputs
+- A single, read-only HTTP GET with redirects.
+- Structured `FetchedPage` results: URL, final URL, status code, content type, HTML,
+  success flag, and a concise error message.
+- Failure modes modeled as data (timeout, SSL, connection, HTTP status, non-HTML content),
+  not exceptions exposed to consumers.
 
-A single `PageObservation` (URL, final URL, status code, success flag, error message,
-canonical URL, headings, visible text, links, images). Consumes observation only — **no
-re-fetch, no raw HTML, no rendered DOM, no browser automation**.
+The observation layer (`src/observation/observation.py`) parses the fetched HTML into a
+deterministic `PageObservation`.
 
-## Output / Finding Contract
+## Not Yet Implemented / Planned
 
-Returns a list of `Finding` objects conforming to the shared contract
-(`id`, `title`, `severity`, `evidence`, `suggested_action`, `priority`, `confidence`, `details`).
+- A `crawl/render` audit callable conforming to `audit_crawl_render(obs) -> list[Finding]`.
+- Rule ids and finding categories for crawl/render accessibility.
+- Registration in the orchestrator registry and default audit set.
 
-## Detection Philosophy
+## Contract for the Future Implementer
 
-- Evidence before inference: only observed delivery/accessibility facts become findings.
-- Conservative severity: normal redirects, minimal pages, and standard JavaScript usage are
-  deliberately **not** flagged.
-- Cautious language: the audit never claims "JavaScript makes this page inaccessible" — it
-  reports that content may depend on client-side rendering.
-- Read-only, deterministic, provider-neutral.
+When Person 1 supplies the Crawl / Render Audit, it should:
 
-## Implemented Rules
+1. Produce `Finding` objects conforming to the existing contract
+   (`id`, `title`, `severity`, `evidence`, `suggested_action`, `priority`, `confidence`, `details`).
+2. Consume the shared `PageObservation` (no re-fetch, no re-parse).
+3. Register itself in the orchestrator audit registry under a stable name.
+4. Preserve the read-only, deterministic, provider-neutral principles of the marketplace.
 
-| id | Category | Severity |
-|----|----------|----------|
-| `CR-001` | Access failure (HTTP 4xx/5xx or connection/timeout errors) | high |
-| `CR-002` | Limited initial HTML / client-side render gap (combined structural shell + negligible visible text) | medium |
-| `CR-003` | Problematic redirect (secure-to-insecure protocol downgrade) | medium |
-| `CR-004` | Invalid/malformed canonical declaration (unsupported scheme or unresolvable) | medium |
-
-Rule guardrails:
-
-- `CR-001` short-circuits: if the page failed to deliver, content-level checks are skipped.
-- `CR-002` does **not** fire when visible text is sufficient (>= 25 words) and does **not** fire
-  on intentionally minimal navigation/legal pages.
-- `CR-003` permits normal upgrades (`http -> https`) and standard path redirects to valid pages.
-- `CR-004` never fires on a missing canonical (absence alone is not a failure).
-
-## Example Finding Categories
-
-- Requests that return 404/500 or time out, blocking any content extraction.
-- A delivered HTML shell with loading-placeholder phrasing, many links and headings, but almost
-  no visible words — substantive content likely depends on client-side execution.
-- An `https://` URL redirected to an `http://` destination.
-- A `<link rel="canonical">` pointing at a `javascript:` or otherwise invalid URL.
-
-## Generalization
-
-Industry-neutral: reachability, protocol delivery, structural shell detection, and canonical
-validity are generic concerns present in every vertical. No website, industry, or provider is
-hard-coded.
-
-## Limitations
-
-- Operates on the single fetched `PageObservation`; it does not execute JavaScript or render
-  screenshots (browser automation is out of scope by design).
-- `CR-002` is a heuristic signal of potential client-side dependence, not proof that content
-  is inaccessible after rendering.
-- `CR-003`/`CR-004` cover the most consequential redirect/canonical failures, not every
-  possible invalid variant.
+Nothing else in the pipeline, aggregation, or reporting needs to change.
