@@ -2,12 +2,17 @@
 
 Composes the existing reusable Agent Skills into one deterministic audit pipeline:
 
-    URL
+    AuditRequest (or plain URL string)
      ↓ fetch_page()          (crawler — one HTTP GET, read-only)
      ↓ observe_page()        (observation — one HTML parse, no network)
      ↓ audit_*(obs)          (each registered audit receives the SAME PageObservation)
-     ↓ deduplicate + sort
+     ↓ source-tag findings   (each finding tagged with its originating audit)
+     ↓ aggregate + deduplicate + sort
      ↓ AuditResult
+     ↓ (+ run_audit_full only)
+     ↓ objective mapping      (map_findings_to_objectives — no semantic links claimed yet)
+     ↓ priority engine        (collect_signals → compute_priorities — orders by audit values only)
+     ↓ AuditReport
 
 Design constraints (enforced, never relaxed):
 - Exactly one crawler call per run.
@@ -19,16 +24,26 @@ Design constraints (enforced, never relaxed):
 - Individual audit failures are isolated; other audits continue.
 - Finding objects are never mutated.
 - Finding.details are gated at the serialisation boundary; not stripped from objects.
+- Source audit attribution is tracked on every finding.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 
+from src.audits.finding_aggregator import (
+    aggregate_findings,
+    deduplicate_findings,
+    sort_findings,
+    tag_findings,
+)
 from src.audits.machine_answerability import audit_machine_answerability
 from src.audits.models import Finding
+from src.audits.objective_mapping import map_findings_to_objectives
+from src.audits.priority_engine import collect_signals, compute_priorities
+from src.audits.reporting import AuditReport, build_report
 from src.audits.task_readiness import audit_task_readiness
 from src.crawler.crawler import DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, FetchedPage, fetch_page
 from src.observation.observation import PageObservation, observe_page
@@ -46,8 +61,36 @@ AUDIT_REGISTRY: dict[str, _AuditFn] = {
     "task_readiness": lambda obs: audit_task_readiness(obs),
 }
 
+# Optional audits — registered but not in default set.
+# They can be activated by name in AuditOptions.audits or AuditRequest.audits.
+_optional_audits_registered = False
+
+
+def _ensure_optional_audits_registered() -> None:
+    """Lazy-register optional audits to avoid import failures when
+    dependencies are unavailable. Called once on first need."""
+    global _optional_audits_registered  # noqa: PLW0603
+    if _optional_audits_registered:
+        return
+    try:
+        from src.audits.engagement import audit_engagement
+        from src.audits.freshness_corroboration import audit_freshness_corroboration
+
+        AUDIT_REGISTRY["engagement"] = lambda obs: audit_engagement(obs)
+        AUDIT_REGISTRY["freshness_corroboration"] = lambda obs: audit_freshness_corroboration(obs)
+    except ImportError:
+        logger.debug("Optional audits (engagement, freshness_corroboration) not available.")
+    _optional_audits_registered = True
+
+
 # Deterministic default execution order (preserves result ordering).
 _DEFAULT_AUDITS: tuple[str, ...] = ("machine_answerability", "task_readiness")
+
+# ---------------------------------------------------------------------------
+# Import AuditRequest for public API
+# ---------------------------------------------------------------------------
+from src.audits.audit_request import AuditContext, AuditRequest  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Public dataclasses
@@ -125,6 +168,7 @@ class AuditResult:
                 "evidence": f.evidence,
                 "priority": f.priority,
                 "confidence": f.confidence,
+                "source_audit": f.source_audit,
                 "suggested_action": {
                     "summary": f.suggested_action.summary,
                     "priority": f.suggested_action.priority,
@@ -154,43 +198,19 @@ class AuditResult:
 def _deduplicate_findings(findings: list[Finding]) -> list[Finding]:
     """Remove exact-duplicate findings while preserving first-occurrence order.
 
-    Deduplication key: (finding.id, finding.evidence[:120])
-
-    Rationale:
-    - Keying on id alone would incorrectly merge two distinct findings from the
-      same rule triggered by different evidence (e.g. two broken Add-to-Cart links).
-    - Truncating evidence to 120 chars provides a stable fingerprint while
-      tolerating minor trailing-whitespace differences.
-    - First occurrence is kept; subsequent identical (id, evidence) pairs are dropped.
+    Delegates to finding_aggregator.deduplicate_findings for the actual logic.
+    Kept as a module-level alias for backward compatibility with existing tests.
     """
-    seen: set[tuple[str, str]] = set()
-    deduped: list[Finding] = []
-    for finding in findings:
-        key = (finding.id, finding.evidence[:120])
-        if key not in seen:
-            seen.add(key)
-            deduped.append(finding)
-    return deduped
-
-
-_SEVERITY_ORDER: dict[str, int] = {
-    "critical": 0,
-    "high": 1,
-    "medium": 2,
-    "low": 3,
-}
+    return deduplicate_findings(findings)
 
 
 def _sort_findings(findings: list[Finding]) -> list[Finding]:
     """Sort findings by (priority ASC, severity DESC) using audit-supplied values only.
 
-    The orchestrator does not invent, modify, or reinterpret severity or priority.
-    It only orders findings for presentation convenience.
+    Delegates to finding_aggregator.sort_findings for the actual logic.
+    Kept as a module-level alias for backward compatibility with existing tests.
     """
-    return sorted(
-        findings,
-        key=lambda f: (f.priority, _SEVERITY_ORDER.get(f.severity, 99)),
-    )
+    return sort_findings(findings)
 
 
 def _run_audit_safe(
@@ -234,6 +254,8 @@ def _resolve_audit_names(requested: tuple[str, ...]) -> tuple[str, ...]:
     Returns:
         De-duplicated tuple of recognised audit names in their original order.
     """
+    _ensure_optional_audits_registered()
+
     seen: set[str] = set()
     resolved: list[str] = []
     for name in requested:
@@ -271,17 +293,37 @@ def _failure_result(
     )
 
 
+def _options_from_request(request: AuditRequest) -> AuditOptions:
+    """Build AuditOptions from an AuditRequest, applying safe defaults."""
+    kwargs: dict[str, Any] = {}
+    if request.audits is not None:
+        kwargs["audits"] = request.audits
+    if request.timeout_seconds is not None:
+        kwargs["timeout_seconds"] = request.timeout_seconds
+    if request.user_agent is not None:
+        kwargs["user_agent"] = request.user_agent
+    kwargs["include_details"] = request.include_details
+    return AuditOptions(**kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Public entrypoint — ONE designated orchestration function
 # ---------------------------------------------------------------------------
 
 
-def run_audit(url: str, options: Optional[AuditOptions] = None) -> AuditResult:
+def run_audit(
+    url: Union[str, AuditRequest],
+    options: Optional[AuditOptions] = None,
+) -> AuditResult:
     """Execute a full read-only audit pipeline for a single URL.
 
     This is the single designated entrypoint for the marketplace orchestrator.
     It composes the existing crawler, observation, and audit Agent Skills without
     duplicating any of their logic.
+
+    Accepts either:
+    - A plain URL string (backward-compatible with existing callers).
+    - An AuditRequest carrying URL, task context, and configuration.
 
     Flow:
         1. Validate/normalise inputs.
@@ -290,22 +332,37 @@ def run_audit(url: str, options: Optional[AuditOptions] = None) -> AuditResult:
         4. For each selected audit: _run_audit_safe(audit_fn, obs, …)
            — all audits receive the SAME PageObservation object.
            — individual audit exceptions are isolated; other audits continue.
-        5. Deduplicate findings (key: id + evidence[:120]).
-        6. Sort findings by (priority ASC, severity DESC).
+        5. Source-tag findings with originating audit name.
+        6. Aggregate: deduplicate + sort.
         7. Return AuditResult.
 
     Args:
-        url: Target URL to audit. Must be an http/https URL. The crawler
-            validates the scheme and returns a failure result for invalid URLs.
+        url: Target URL string or AuditRequest. When an AuditRequest is provided,
+            its target_url is used for crawling and its configuration overrides
+            the options parameter.
         options: Optional AuditOptions controlling audit selection, HTTP timeout,
             User-Agent, and include_details behaviour. Safe defaults are applied
-            when None.
+            when None. Ignored when request carries its own audit configuration.
 
     Returns:
         AuditResult. is_success is True if crawling and observation both succeeded
         (even if findings are present). is_success is False on network errors,
         non-HTML content, or observation failures.
     """
+    # ------------------------------------------------------------------
+    # Step 0 — Normalise inputs (handle AuditRequest or plain URL)
+    # ------------------------------------------------------------------
+    request: Optional[AuditRequest] = None
+    if isinstance(url, AuditRequest):
+        request = url
+        target_url = request.target_url
+        if options is None:
+            options = _options_from_request(request)
+        elif request.audits is not None:
+            options = _options_from_request(request)
+    else:
+        target_url = url
+
     if options is None:
         options = AuditOptions()
 
@@ -318,14 +375,14 @@ def run_audit(url: str, options: Optional[AuditOptions] = None) -> AuditResult:
     # Step 2 — Crawl (exactly one fetch_page call)
     # ------------------------------------------------------------------
     fetched: FetchedPage = fetch_page(
-        url,
+        target_url,
         timeout=options.timeout_seconds,
         user_agent=options.user_agent,
     )
 
     if not fetched.is_success:
         return _failure_result(
-            requested_url=url,
+            requested_url=target_url,
             error_message=fetched.error_message or "Page fetch was unsuccessful.",
             options=options,
             fetched=fetched,
@@ -338,7 +395,7 @@ def run_audit(url: str, options: Optional[AuditOptions] = None) -> AuditResult:
         obs: PageObservation = observe_page(fetched)
     except Exception as exc:  # noqa: BLE001
         return _failure_result(
-            requested_url=url,
+            requested_url=target_url,
             error_message=f"Observation layer raised an unexpected exception: {exc}",
             options=options,
             fetched=fetched,
@@ -348,7 +405,7 @@ def run_audit(url: str, options: Optional[AuditOptions] = None) -> AuditResult:
     # observation (e.g. HTML parse failure). Treat this as a pipeline failure.
     if not obs.is_success:
         return _failure_result(
-            requested_url=url,
+            requested_url=target_url,
             error_message=obs.error_message or "Observation of fetched page was unsuccessful.",
             options=options,
             fetched=fetched,
@@ -356,26 +413,27 @@ def run_audit(url: str, options: Optional[AuditOptions] = None) -> AuditResult:
 
     # ------------------------------------------------------------------
     # Step 4 — Run each selected audit against THE SAME obs
+    #         Source-tag findings with originating audit name
     # ------------------------------------------------------------------
     audit_errors: dict[str, str] = {}
     all_findings: list[Finding] = []
 
     for name in audit_names:
         audit_fn = AUDIT_REGISTRY[name]
-        findings = _run_audit_safe(audit_fn, obs, name, audit_errors)
-        all_findings.extend(findings)
+        raw_findings = _run_audit_safe(audit_fn, obs, name, audit_errors)
+        tagged = tag_findings(raw_findings, source_audit=name)
+        all_findings.extend(tagged)
 
     # ------------------------------------------------------------------
-    # Step 5 — Deduplicate then sort
+    # Step 5 — Aggregate: deduplicate then sort
     # ------------------------------------------------------------------
-    deduped = _deduplicate_findings(all_findings)
-    sorted_findings = _sort_findings(deduped)
+    sorted_findings = aggregate_findings(all_findings)
 
     # ------------------------------------------------------------------
     # Step 6 — Return structured result
     # ------------------------------------------------------------------
     return AuditResult(
-        requested_url=url,
+        requested_url=target_url,
         final_url=obs.final_url,
         status_code=obs.status_code,
         is_success=True,
@@ -384,3 +442,78 @@ def run_audit(url: str, options: Optional[AuditOptions] = None) -> AuditResult:
         audit_errors=audit_errors,
         options=options,
     )
+
+
+# ---------------------------------------------------------------------------
+# Extended entrypoint — returns AuditReport for downstream consumers
+# ---------------------------------------------------------------------------
+
+
+def run_audit_full(
+    url: Union[str, AuditRequest],
+    options: Optional[AuditOptions] = None,
+) -> tuple[AuditResult, AuditReport]:
+    """Execute a full audit pipeline and return both AuditResult and AuditReport.
+
+    This is the extended entrypoint for consumers that need the full report
+    structure. It wires the downstream stages in fixed architecture order:
+
+        run_audit (fetch → observe → audits → aggregate)
+            ↓ Objective Mapping    (map_findings_to_objectives)
+            ↓ Priority Engine      (collect_signals → compute_priorities)
+            ↓ Final Report         (build_report)
+
+    run_audit() itself is unchanged and remains the backward-compatible
+    entrypoint for callers that only need the AuditResult.
+
+    Args:
+        url: Target URL string or AuditRequest.
+        options: Optional AuditOptions.
+
+    Returns:
+        Tuple of (AuditResult, AuditReport).
+    """
+    result = run_audit(url, options)
+
+    # Extract context from AuditRequest if provided
+    task_intent = None
+    task_description = None
+    target_objectives: list[str] = []
+    if isinstance(url, AuditRequest) and url.context is not None:
+        task_intent = url.context.task_intent
+        task_description = url.context.task_description
+        target_objectives = url.context.target_objectives
+
+    # Objective Mapping — conservative: no semantic links claimed until
+    # evidence-based matching exists (affected_objectives always empty).
+    objective_mappings = map_findings_to_objectives(
+        result.findings,
+        target_objectives=target_objectives or None,
+    )
+
+    # Priority Engine — conservative: orders by audit-supplied priority and
+    # severity only; no invented weighted scoring.
+    priority_signals = compute_priorities(
+        collect_signals(
+            result.findings,
+            affected_url=result.final_url or result.requested_url,
+        )
+    )
+
+    report = build_report(
+        requested_url=result.requested_url,
+        final_url=result.final_url,
+        status_code=result.status_code,
+        is_success=result.is_success,
+        error_message=result.error_message,
+        findings=result.findings,
+        audit_errors=result.audit_errors,
+        audits_run=list(result.options.audits),
+        task_intent=task_intent,
+        task_description=task_description,
+        target_objectives=target_objectives,
+        objective_mappings=objective_mappings,
+        priority_signals=priority_signals,
+    )
+
+    return result, report

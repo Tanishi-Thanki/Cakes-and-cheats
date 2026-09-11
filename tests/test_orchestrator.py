@@ -465,7 +465,12 @@ class TestFindingImmutability(unittest.TestCase):
     def test_finding_objects_are_not_mutated(
         self, mock_fetch, mock_observe, mock_ma, mock_tr
     ) -> None:
-        """Test 14: The exact same Finding object appears in AuditResult (no reconstruction)."""
+        """Test 14: Original Finding objects are never mutated by the orchestrator.
+
+        The orchestrator creates tagged copies with source_audit attribution
+        rather than mutating the originals. All original fields are preserved
+        in the tagged copy.
+        """
         mock_fetch.return_value = _make_fetched_page()
         mock_observe.return_value = _make_observation()
         original_finding = _make_finding("MA-IMG-001", evidence="Original evidence text.")
@@ -475,13 +480,20 @@ class TestFindingImmutability(unittest.TestCase):
         result = run_audit("https://example.com/")
 
         self.assertEqual(len(result.findings), 1)
-        # Identity check: the orchestrator must not reconstruct or wrap the Finding.
-        self.assertIs(result.findings[0], original_finding)
-        # Frozen dataclass: any attempt to mutate would raise FrozenInstanceError;
-        # verify fields are unchanged.
-        self.assertEqual(result.findings[0].id, "MA-IMG-001")
-        self.assertEqual(result.findings[0].evidence, "Original evidence text.")
-        self.assertEqual(result.findings[0].details, {"internal_key": "internal_value"})
+        tagged = result.findings[0]
+        # All original fields are preserved exactly.
+        self.assertEqual(tagged.id, "MA-IMG-001")
+        self.assertEqual(tagged.title, "Test Finding")
+        self.assertEqual(tagged.severity, "high")
+        self.assertEqual(tagged.evidence, "Original evidence text.")
+        self.assertEqual(tagged.priority, 1)
+        self.assertEqual(tagged.confidence, "medium")
+        self.assertEqual(tagged.details, {"internal_key": "internal_value"})
+        # Source audit is attributed by the orchestrator.
+        self.assertEqual(tagged.source_audit, "machine_answerability")
+        # Original finding object is not mutated.
+        self.assertEqual(original_finding.source_audit, "")
+        self.assertEqual(original_finding.id, "MA-IMG-001")
 
 
 # ---------------------------------------------------------------------------
