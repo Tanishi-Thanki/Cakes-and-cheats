@@ -62,10 +62,11 @@
       "id": "crawl-render-audit",
       "name": "Crawl / Render Audit",
       "path": "skills/crawl-render-audit/SKILL.md",
-      "status": "planned",
+      "status": "available",
       "role": "audit",
-      "note": "PENDING — not yet implemented or registered in the orchestrator. The read-only crawler foundation exists; the audit rule set and rendering-layer checks are planned."
+      "description": "Evaluates whether technical delivery, accessibility, or rendering characteristics prevent automated agents and crawlers from reliably accessing and extracting content (CR-001 access failure, CR-002 limited initial HTML / client-side render gap, CR-003 problematic redirect downgrade, CR-004 invalid canonical declaration).",
+      "note": "Implemented in src/audits/crawl_render.py and registered in the orchestrator under 'crawl_render' (optional audit, selected by name)."
     }
   ],
-  "note": "Skill list reflects current implementation state. Skills marked 'planned' are placeholders that are not registered in the audit orchestrator and must not be invoked until implemented."
+  "note": "Skill list reflects current implementation state. Skills are registered in the audit orchestrator under stable names; all listed skills are implemented."
 }
