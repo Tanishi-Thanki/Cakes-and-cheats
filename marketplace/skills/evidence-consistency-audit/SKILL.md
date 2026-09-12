@@ -10,8 +10,9 @@ description: Extracts and preserves provider-neutral evidence facts (price, avai
 >
 > Implemented in `src/audits/evidence_consistency.py` as
 > `audit_evidence_consistency(obs) -> list[Finding]` and registered in the
-> orchestrator under the stable name `evidence_consistency` (optional audit,
-> selected via `AuditOptions.audits` / `AuditRequest.audits`).
+> orchestrator under the stable name `evidence_consistency` as part of the
+> default six-audit pipeline (callers may also explicitly select a subset via
+> `AuditOptions.audits` / `AuditRequest.audits`).
 
 ## Purpose
 

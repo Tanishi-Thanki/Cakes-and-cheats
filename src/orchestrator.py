@@ -133,6 +133,7 @@ class AuditOptions:
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     user_agent: str = DEFAULT_USER_AGENT
     include_details: bool = False
+    check_robots: bool = True
 
 
 @dataclass(frozen=True)
@@ -317,6 +318,8 @@ def _options_from_request(request: AuditRequest) -> AuditOptions:
         kwargs["timeout_seconds"] = request.timeout_seconds
     if request.user_agent is not None:
         kwargs["user_agent"] = request.user_agent
+    if getattr(request, "check_robots", None) is not None:
+        kwargs["check_robots"] = request.check_robots
     kwargs["include_details"] = request.include_details
     return AuditOptions(**kwargs)
 
@@ -393,6 +396,7 @@ def run_audit(
         target_url,
         timeout=options.timeout_seconds,
         user_agent=options.user_agent,
+        check_robots=options.check_robots,
     )
 
     if not fetched.is_success:

@@ -42,7 +42,7 @@ class TestCrawler(unittest.TestCase):
         mock_get.return_value = mock_response
 
         initial_url = "http://example.com"
-        result: FetchedPage = fetch_page(initial_url)
+        result: FetchedPage = fetch_page(initial_url, check_robots=False)
 
         self.assertTrue(result.is_success)
         self.assertEqual(result.requested_url, initial_url)
@@ -189,6 +189,97 @@ class TestCrawler(unittest.TestCase):
                 self.assertIsNone(result.status_code)
                 self.assertEqual(result.html_content, "")
                 self.assertIn("Invalid URL", result.error_message or "")
+
+    @patch("src.crawler.crawler.requests.get")
+    def test_fetch_page_robots_txt_allowed(self, mock_get: MagicMock) -> None:
+        """Test that page fetch succeeds when robots.txt permits the user agent."""
+        robots_resp = MagicMock()
+        robots_resp.status_code = 200
+        robots_resp.text = "User-agent: *\nAllow: /\n"
+        robots_resp.url = "https://example.com/robots.txt"
+
+        page_resp = MagicMock()
+        page_resp.status_code = 200
+        page_resp.text = "<html><body><h1>Allowed Page</h1></body></html>"
+        page_resp.headers = {"Content-Type": "text/html"}
+        page_resp.url = "https://example.com/allowed"
+
+        mock_get.side_effect = [robots_resp, page_resp]
+
+        result = fetch_page("https://example.com/allowed", check_robots=True)
+        self.assertTrue(result.is_success)
+        self.assertEqual(result.html_content, "<html><body><h1>Allowed Page</h1></body></html>")
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch("src.crawler.crawler.requests.get")
+    def test_fetch_page_robots_txt_disallowed(self, mock_get: MagicMock) -> None:
+        """Test that fetch is blocked and returns structured error when disallowed by robots.txt."""
+        robots_resp = MagicMock()
+        robots_resp.status_code = 200
+        robots_resp.text = "User-agent: *\nDisallow: /private/\n"
+        robots_resp.url = "https://example.com/robots.txt"
+
+        mock_get.return_value = robots_resp
+
+        result = fetch_page("https://example.com/private/page", check_robots=True)
+        self.assertFalse(result.is_success)
+        self.assertIsNone(result.status_code)
+        self.assertIn("robots.txt", result.error_message or "")
+        # Only robots.txt should have been fetched; target page was NOT fetched
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("src.crawler.crawler.requests.get")
+    def test_fetch_page_robots_txt_unavailable_fails_open(self, mock_get: MagicMock) -> None:
+        """Test that crawler fails open when robots.txt returns 404 or encounters an error."""
+        robots_resp = MagicMock()
+        robots_resp.status_code = 404
+        robots_resp.text = "Not Found"
+        robots_resp.url = "https://example.com/robots.txt"
+
+        page_resp = MagicMock()
+        page_resp.status_code = 200
+        page_resp.text = "<html><body><h1>Content</h1></body></html>"
+        page_resp.headers = {"Content-Type": "text/html"}
+        page_resp.url = "https://example.com/page"
+
+        mock_get.side_effect = [robots_resp, page_resp]
+
+        result = fetch_page("https://example.com/page", check_robots=True)
+        self.assertTrue(result.is_success)
+        self.assertEqual(result.status_code, 200)
+
+    @patch("src.crawler.crawler.requests.get")
+    def test_fetch_page_robots_txt_user_agent_specific_rule(self, mock_get: MagicMock) -> None:
+        """Test that user-agent specific directives in robots.txt are respected."""
+        robots_content = (
+            "User-agent: OtherBot\n"
+            "Disallow: /\n\n"
+            "User-agent: CustomAuditor\n"
+            "Disallow: /restricted/\n"
+            "Allow: /public/\n"
+        )
+        robots_resp = MagicMock()
+        robots_resp.status_code = 200
+        robots_resp.text = robots_content
+        robots_resp.url = "https://example.com/robots.txt"
+
+        mock_get.return_value = robots_resp
+
+        # Should be disallowed for CustomAuditor on /restricted/
+        result_blocked = fetch_page(
+            "https://example.com/restricted/info",
+            user_agent="CustomAuditor/1.0",
+            check_robots=True,
+        )
+        self.assertFalse(result_blocked.is_success)
+        self.assertIn("robots.txt", result_blocked.error_message or "")
+
+        # Verify User-Agent header passed to robots.txt request
+        first_call_args = mock_get.call_args_list[0]
+        self.assertEqual(
+            first_call_args[1].get("headers", {}).get("User-Agent"),
+            "CustomAuditor/1.0",
+        )
 
 
 if __name__ == "__main__":

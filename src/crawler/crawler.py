@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 import urllib.parse
+import urllib.robotparser
 import requests
 
 DEFAULT_TIMEOUT_SECONDS: float = 10.0
@@ -53,10 +54,72 @@ def _is_html_content_type(content_type_header: str) -> bool:
     return media_type in HTML_CONTENT_TYPES
 
 
+def check_robots_txt(
+    url: str,
+    user_agent: str = DEFAULT_USER_AGENT,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> tuple[bool, Optional[str]]:
+    """Check whether url can be fetched according to the site's robots.txt.
+
+    Uses urllib.robotparser.RobotFileParser and issues a single read-only HTTP GET
+    to '{scheme}://{netloc}/robots.txt'.
+
+    Returns:
+        (allowed, reason):
+        - If allowed, or if robots.txt is missing/unavailable (4xx, network error, timeout),
+          returns (True, None) to fail open conservatively per web crawler standards.
+        - If explicitly disallowed for the user_agent, returns (False, explanation).
+    """
+    if not isinstance(url, str) or not url.strip():
+        return True, None
+
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return True, None
+        if parsed.path == "/robots.txt":
+            return True, None
+        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    except Exception:
+        return True, None
+
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "text/plain,text/*;q=0.9,*/*;q=0.8",
+    }
+
+    try:
+        resp = requests.get(
+            robots_url,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+    except Exception:
+        # Network errors, timeouts, SSL errors: robots.txt is unreachable -> fail open
+        return True, None
+
+    # If 4xx (e.g. 404), robots.txt is absent -> allowed
+    # If 5xx, treat as unavailable -> fail open
+    if resp.status_code != 200 or not resp.text:
+        return True, None
+
+    try:
+        rp = urllib.robotparser.RobotFileParser()
+        rp.parse(resp.text.splitlines())
+        if not rp.can_fetch(user_agent, url):
+            return False, f"Access disallowed by robots.txt at '{robots_url}' for User-Agent '{user_agent}'."
+    except Exception:
+        return True, None
+
+    return True, None
+
+
 def fetch_page(
     url: str,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     user_agent: str = DEFAULT_USER_AGENT,
+    check_robots: bool = True,
 ) -> FetchedPage:
     """Fetch a single web page via HTTP GET and return structured page data.
 
@@ -64,6 +127,7 @@ def fetch_page(
         url: The URL of the page to fetch. Must be an http or https URL.
         timeout: Timeout in seconds for connection and read. Defaults to 10.0.
         user_agent: Descriptive User-Agent string sent in request headers.
+        check_robots: Whether to check robots.txt before fetching. Defaults to True.
 
     Returns:
         FetchedPage containing requested URL, final URL, status code,
@@ -110,7 +174,21 @@ def fetch_page(
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
-    # 2. Execute read-only HTTP GET
+    # 2. Check robots.txt compliance if enabled
+    if check_robots:
+        allowed, reason = check_robots_txt(clean_url, user_agent=user_agent, timeout=timeout)
+        if not allowed:
+            return FetchedPage(
+                requested_url=clean_url,
+                final_url="",
+                status_code=None,
+                content_type="",
+                html_content="",
+                is_success=False,
+                error_message=reason or f"Access disallowed by robots.txt for User-Agent '{user_agent}'.",
+            )
+
+    # 3. Execute read-only HTTP GET
     try:
         response = requests.get(
             clean_url,
