@@ -75,10 +75,12 @@ def _classify_error(message: Optional[str]) -> str:
         ("Connection error", "connection_error"),
         ("timed out", "timeout"),
         ("SSL", "ssl_error"),
+        ("Too many redirects", "too_many_redirects"),
         ("HTTP error status", "http_error"),
         ("Invalid URL", "invalid_url"),
         ("non-HTML", "non_html"),
         ("Failed to decode", "decode_error"),
+        ("exceeds the", "response_too_large"),
     ):
         if token in text:
             return category

@@ -18,6 +18,11 @@ DEFAULT_USER_AGENT: str = (
     "CakesAndCheats-Auditor/1.0 (+https://github.com/Tanishi-Thanki/Cakes-and-cheats; Adobe Hackathon 2026)"
 )
 
+# Conservative per-response body cap (bytes). A non-HTML/oversized body is
+# rejected before decode so single fetches stay memory-bounded even when a
+# server streams unbounded content. Pass max_response_bytes=None to disable.
+DEFAULT_MAX_RESPONSE_BYTES: int = 5_000_000
+
 # Accepted HTML MIME types
 HTML_CONTENT_TYPES: tuple[str, ...] = (
     "text/html",
@@ -96,6 +101,39 @@ def _is_text_content_type(content_type_header: str) -> bool:
     return media_type in TEXT_CONTENT_TYPES or media_type.endswith("+xml")
 
 
+def _response_over_limit(response, max_bytes: int) -> bool:
+    """Return True when response declares or materializes a body over max_bytes.
+
+    Never raises, tolerating minimal/fake response objects (no usable headers,
+    content, or text). A declared ``Content-Length`` over the cap is rejected
+    before the body is read; a materialized bytes body is measured exactly;
+    otherwise decoded text length (UTF-8) is used as a conservative proxy.
+    """
+    if max_bytes is None or max_bytes <= 0:
+        return False
+    headers = getattr(response, "headers", None)
+    if headers is not None and hasattr(headers, "get"):
+        try:
+            declared = int(str(headers.get("Content-Length") or "").strip())
+        except (TypeError, ValueError):
+            declared = 0
+        if declared > max_bytes:
+            return True
+    try:
+        content = getattr(response, "content", None)
+    except Exception:
+        content = None
+    if isinstance(content, bytes):
+        return len(content) > max_bytes
+    try:
+        text = getattr(response, "text", None)
+    except Exception:
+        text = None
+    if isinstance(text, str):
+        return len(text.encode("utf-8", errors="replace")) > max_bytes
+    return False
+
+
 def check_robots_txt(
     url: str,
     user_agent: str = DEFAULT_USER_AGENT,
@@ -143,7 +181,12 @@ def check_robots_txt(
 
     # If 4xx (e.g. 404), robots.txt is absent -> allowed
     # If 5xx, treat as unavailable -> fail open
-    if resp.status_code != 200 or not resp.text:
+    # An oversized robots.txt body is treated as unavailable -> fail open
+    if resp.status_code != 200:
+        return True, None
+    if _response_over_limit(resp, DEFAULT_MAX_RESPONSE_BYTES):
+        return True, None
+    if not resp.text:
         return True, None
 
     try:
@@ -162,6 +205,7 @@ def fetch_page(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     user_agent: str = DEFAULT_USER_AGENT,
     check_robots: bool = True,
+    max_response_bytes: Optional[int] = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> FetchedPage:
     """Fetch a single web page via HTTP GET and return structured page data.
 
@@ -170,6 +214,9 @@ def fetch_page(
         timeout: Timeout in seconds for connection and read. Defaults to 10.0.
         user_agent: Descriptive User-Agent string sent in request headers.
         check_robots: Whether to check robots.txt before fetching. Defaults to True.
+        max_response_bytes: Maximum accepted body size in bytes (None disables).
+            Oversized responses are rejected deterministically without being
+            retained or decoded.
 
     Returns:
         FetchedPage containing requested URL, final URL, status code,
@@ -268,6 +315,16 @@ def fetch_page(
             is_success=False,
             error_message=f"Connection error: {err}",
         )
+    except requests.exceptions.TooManyRedirects as err:
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url="",
+            status_code=None,
+            content_type="",
+            html_content="",
+            is_success=False,
+            error_message=f"Too many redirects while following URL chain: {err}",
+        )
     except requests.exceptions.RequestException as err:
         return FetchedPage(
             requested_url=clean_url,
@@ -321,6 +378,22 @@ def fetch_page(
             response_headers=response_headers,
         )
 
+    # Check for oversized responses before any decoding work
+    if max_response_bytes is not None and _response_over_limit(response, max_response_bytes):
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url=final_url,
+            status_code=status_code,
+            content_type=content_type,
+            html_content="",
+            is_success=False,
+            error_message=(
+                f"Response body exceeds the {max_response_bytes}-byte limit "
+                f"(Content-Type: '{content_type}')."
+            ),
+            response_headers=response_headers,
+        )
+
     # 4. Safely extract decoded text
     try:
         html_text = response.text
@@ -353,6 +426,7 @@ def fetch_text(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     user_agent: str = DEFAULT_USER_AGENT,
     check_robots: bool = False,
+    max_response_bytes: Optional[int] = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> FetchedPage:
     """Fetch a text/XML resource (robots.txt, sitemap.xml) via read-only HTTP GET.
 
@@ -445,6 +519,16 @@ def fetch_text(
             is_success=False,
             error_message=f"Connection error: {err}",
         )
+    except requests.exceptions.TooManyRedirects as err:
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url="",
+            status_code=None,
+            content_type="",
+            html_content="",
+            is_success=False,
+            error_message=f"Too many redirects while following URL chain: {err}",
+        )
     except requests.exceptions.RequestException as err:
         return FetchedPage(
             requested_url=clean_url,
@@ -492,6 +576,18 @@ def fetch_text(
             html_content="",
             is_success=False,
             error_message=f"Rejected non-text response (Content-Type: '{content_type}').",
+            response_headers=response_headers,
+        )
+
+    if max_response_bytes is not None and _response_over_limit(response, max_response_bytes):
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url=final_url,
+            status_code=status_code,
+            content_type=content_type,
+            html_content="",
+            is_success=False,
+            error_message=f"Response body exceeds the {max_response_bytes}-byte limit.",
             response_headers=response_headers,
         )
 

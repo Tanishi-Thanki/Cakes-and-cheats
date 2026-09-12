@@ -60,11 +60,19 @@ def _idna_host(host: str) -> str:
 
 def _build_netloc(parts: urllib.parse.SplitResult) -> str:
     """Reconstruct netloc with lowercased/idna host, default port dropped,
-    and any userinfo preserved verbatim."""
-    host = _idna_host(parts.hostname or "")
-    if not host:
+    and any userinfo preserved verbatim.
+
+    Returns "" when the host/port cannot be parsed safely (e.g. a malformed
+    port like ``https://host:abc/``) so the public URL helpers fail soft
+    instead of raising on hostile page links.
+    """
+    try:
+        host = _idna_host(parts.hostname or "")
+        if not host:
+            return ""
+        port = parts.port
+    except ValueError:
         return ""
-    port = parts.port
     default_port = _DEFAULT_PORTS.get(parts.scheme.lower())
     host_port = host if port is None or port == default_port else f"{host}:{port}"
     userinfo = ""
@@ -123,12 +131,16 @@ def extract_site_key(url: str) -> Optional[str]:
         parts = urllib.parse.urlsplit(url.strip())
     except Exception:
         return None
-    if parts.scheme.lower() not in CRAWLABLE_SCHEMES or not parts.hostname:
+    if parts.scheme.lower() not in CRAWLABLE_SCHEMES:
         return None
-    host = _idna_host(parts.hostname or "")
-    if not host:
+    try:
+        host = _idna_host(parts.hostname or "")
+        if not host:
+            return None
+        port = parts.port
+    except ValueError:
+        # Malformed port (e.g. "https://host:abc/"): cannot be scoped safely.
         return None
-    port = parts.port
     default_port = _DEFAULT_PORTS.get(parts.scheme.lower())
     if port is None or port == default_port:
         return host
