@@ -590,10 +590,17 @@ class TestDefaultAuditSelection(unittest.TestCase):
         mock_ma.assert_called_once()
         mock_tr.assert_called_once()
 
-    def test_default_audits_tuple_covers_both_skills(self) -> None:
-        """Test 16b: _DEFAULT_AUDITS covers both 'machine_answerability' and 'task_readiness'."""
-        self.assertIn("machine_answerability", _DEFAULT_AUDITS)
-        self.assertIn("task_readiness", _DEFAULT_AUDITS)
+    def test_default_audits_tuple_covers_all_six_skills(self) -> None:
+        """Test 16b: _DEFAULT_AUDITS covers all six specialist audits."""
+        for name in (
+            "machine_answerability",
+            "task_readiness",
+            "crawl_render",
+            "engagement",
+            "evidence_consistency",
+            "freshness_corroboration",
+        ):
+            self.assertIn(name, _DEFAULT_AUDITS)
 
     def test_audit_registry_contains_both_skills(self) -> None:
         """Test 16c: AUDIT_REGISTRY maps both audit names to callable functions."""
@@ -664,10 +671,17 @@ class TestDataclassContracts(unittest.TestCase):
     """Verify that AuditOptions and AuditResult meet their documented contracts."""
 
     def test_audit_options_defaults(self) -> None:
-        """AuditOptions() without arguments should produce conservative defaults."""
+        """AuditOptions() without arguments should default to all six specialist audits."""
         opts = AuditOptions()
-        self.assertIn("machine_answerability", opts.audits)
-        self.assertIn("task_readiness", opts.audits)
+        for name in (
+            "machine_answerability",
+            "task_readiness",
+            "crawl_render",
+            "engagement",
+            "evidence_consistency",
+            "freshness_corroboration",
+        ):
+            self.assertIn(name, opts.audits)
         self.assertFalse(opts.include_details)
         self.assertGreater(opts.timeout_seconds, 0)
 
@@ -725,12 +739,12 @@ class TestFindingSorting(unittest.TestCase):
 # Test 19: crawl_render is registered as an optional audit
 # ---------------------------------------------------------------------------
 
-class TestCrawlRenderOptionalRegistration(unittest.TestCase):
-    """Test 19 — crawl_render is reachable as an optional audit, not a default."""
+class TestCrawlRenderDefaultRegistration(unittest.TestCase):
+    """Test 19 — crawl_render is in both _DEFAULT_AUDITS and AUDIT_REGISTRY."""
 
-    def test_crawl_render_not_in_default_audits(self) -> None:
-        """Test 19a: 'crawl_render' must NOT appear in _DEFAULT_AUDITS (it is optional)."""
-        self.assertNotIn("crawl_render", _DEFAULT_AUDITS)
+    def test_crawl_render_in_default_audits(self) -> None:
+        """Test 19a: 'crawl_render' IS in _DEFAULT_AUDITS (all six audits are default)."""
+        self.assertIn("crawl_render", _DEFAULT_AUDITS)
 
     def test_crawl_render_in_registry_after_optional_registration(self) -> None:
         """Test 19b: After optional audits are registered, 'crawl_render' is in AUDIT_REGISTRY
