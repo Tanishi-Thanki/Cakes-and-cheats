@@ -50,6 +50,14 @@ from src.observation.observation import PageObservation, observe_page
 
 MAX_ERROR_SAMPLES: int = 10
 
+# Discovery-source labels assigned to every crawled URL (P1-T5). Purely
+# additive bookkeeping: they describe how a URL was first reached (or, for
+# unvisited URLs, how it would have been), and never alter crawl-depth
+# semantics — a sitemap-seeded page is still crawled at literal BFS depth 1.
+DISCOVERY_SOURCE_START: str = "start"
+DISCOVERY_SOURCE_LINK: str = "link"
+DISCOVERY_SOURCE_SITEMAP: str = "sitemap"
+
 FetcherCallable = Callable[[str, float, str, bool], FetchedPage]
 ObserverCallable = Callable[[FetchedPage], PageObservation]
 
@@ -112,6 +120,10 @@ class CrawlPageRecord:
     ``observation`` is populated (and the crawl finds no links from it) only
     when the page fetched successfully; on failure it is None and the error is
     preserved in ``error_message``.
+
+    ``discovery_sources`` (P1-T5) records how the URL was reached: a subset of
+    ``start`` / ``link`` / ``sitemap``. A URL may legitimately carry more than
+    one source (for example a sitemap seed that other pages also link to).
     """
 
     url: str  # normalized URL
@@ -120,6 +132,40 @@ class CrawlPageRecord:
     is_success: bool
     error_message: Optional[str]
     observation: Optional[PageObservation] = field(repr=False, compare=False)
+    discovery_sources: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class UnvisitedUrlRecord:
+    """A same-site http(s) URL the crawl discovered but never attempted to fetch.
+
+    Deliberately distinct from ``CrawlPageRecord`` failures: these URLs were
+    never fetched at all. ``reason`` is a stable deterministic category:
+
+    - ``"max_pages"``: found on a discovered page, but the crawl budget
+      (``max_pages``) was exhausted before the URL could be admitted to the
+      queue (or the queue could not be drained).
+    - ``"max_depth"``: found only on a page at the depth boundary, so the URL
+      was never eligible to be fetched under the depth limit.
+
+    The collection is always capped at ``max_pages`` records so it can never
+    defeat the crawl budget or grow without bound.
+
+    Attributes:
+        url: Normalized same-site http(s) URL.
+        reason: Stable reason the URL was not visited.
+        depth: The crawl depth at which the URL would have been fetched
+            (nominal discovery depth; never a literal link depth).
+        sources: Discovery sources observed (subset of ``link`` / ``sitemap``).
+        discovered_from: Page URL whose links revealed this URL, when known;
+            None for URLs first seen through sitemap admission.
+    """
+
+    url: str
+    reason: str
+    depth: int
+    sources: tuple[str, ...] = ()
+    discovered_from: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +216,12 @@ class CrawlResult:
     ``is_success`` is True when the start URL itself was fetched. A crawl that
     ran but had individual page failures still has ``is_success`` True; per-page
     failures are always recorded in ``stats`` and ``pages``.
+
+    P1-T5 additive fields:
+    - ``unvisited_urls``: bounded records of same-site URLs discovered but never
+      fetched (with the deterministic reason they were skipped).
+    - ``sitemap_discovery``: the bounded sitemap discovery result used to seed
+      the crawl, when discovery ran and produced one.
     """
 
     stats: CrawlStats
@@ -177,6 +229,8 @@ class CrawlResult:
     pages_by_url: dict[str, CrawlPageRecord] = field(repr=False, compare=False)
     is_success: bool
     error_message: Optional[str] = None
+    unvisited_urls: list[UnvisitedUrlRecord] = field(default_factory=list)
+    sitemap_discovery: Optional[SitemapDiscoveryResult] = None
 
 
 def _invalid_start(start_url: str, reason: str) -> CrawlResult:
@@ -269,11 +323,13 @@ def crawl_site(
         sitemap_files_parsed = len(discovery.sitemap_files_parsed)
 
     discovered: set[str] = {start_norm}
+    sources_by_url: dict[str, set[str]] = {start_norm: {DISCOVERY_SOURCE_START}}
     queue: deque[tuple[str, int]] = deque([(start_norm, 0)])
     if discovery is not None:
         for seed in discovery.discovered_urls:
             if len(discovered) >= max_pages:
                 break  # discovery budget exhausted; stop cleanly
+            sources_by_url.setdefault(seed, set()).add(DISCOVERY_SOURCE_SITEMAP)
             if seed in discovered:
                 continue
             discovered.add(seed)
@@ -292,6 +348,34 @@ def crawl_site(
 
     is_success = False
     start_error: Optional[str] = None
+
+    # P1-T5: bounded record of same-site URLs discovered but never fetched,
+    # capped at max_pages so it can never defeat the crawl budget.
+    unvisited: list[UnvisitedUrlRecord] = []
+    unvisited_seen: set[str] = set()
+
+    def _record_unvisited(
+        url: str,
+        reason: str,
+        depth: int,
+        discovered_from: Optional[str] = None,
+    ) -> None:
+        if url in unvisited_seen or len(unvisited) >= max_pages:
+            return
+        unvisited_seen.add(url)
+        sources = set(sources_by_url.get(url, ()))
+        if reason in ("max_pages", "max_depth"):
+            # Both categories were found as link targets on a crawled page.
+            sources.add(DISCOVERY_SOURCE_LINK)
+        unvisited.append(
+            UnvisitedUrlRecord(
+                url=url,
+                reason=reason,
+                depth=depth,
+                sources=tuple(sorted(sources)),
+                discovered_from=discovered_from,
+            )
+        )
 
     while queue and len(visited) < max_pages:
         url, depth = queue.popleft()
@@ -315,6 +399,7 @@ def crawl_site(
                     is_success=False,
                     error_message=error_message,
                     observation=None,
+                    discovery_sources=tuple(sorted(sources_by_url.get(url, ()))),
                 )
             )
             category = _classify_error(error_message)
@@ -332,9 +417,38 @@ def crawl_site(
         obs = observer(fetched)
 
         if obs.is_success and obs.links and depth + 1 <= max_depth:
+            budget_exhausted = False
             for link in obs.links:
-                if len(discovered) >= max_pages:
-                    break  # discovery budget exhausted; stop cleanly
+                if budget_exhausted and len(unvisited) >= max_pages:
+                    break  # only capped bookkeeping remains; stay bounded
+                if not link.href:
+                    continue
+                if not budget_exhausted and len(discovered) >= max_pages:
+                    budget_exhausted = True  # stop admitting; record the rest
+                candidate = resolve_and_normalize(url, link.href)
+                if (not candidate or not is_crawlable_scheme(candidate)
+                        or is_rejected_scheme(candidate)):
+                    continue
+                if not is_same_site(candidate, scope_url):
+                    continue
+                if candidate in visited or candidate in discovered:
+                    if candidate in discovered and not budget_exhausted:
+                        # Track overlap sources without admitting the URL again.
+                        sources_by_url[candidate].add(DISCOVERY_SOURCE_LINK)
+                    continue
+                if budget_exhausted:
+                    _record_unvisited(candidate, "max_pages", depth + 1, url)
+                    continue
+                discovered.add(candidate)
+                sources_by_url[candidate] = {DISCOVERY_SOURCE_LINK}
+                queue.append((candidate, depth + 1))
+        elif obs.is_success and obs.links:
+            # Depth-boundary page: link targets are discovered but never
+            # eligible to be fetched. Record a bounded sample of the internal
+            # ones (reason "max_depth") without touching the crawl budget.
+            for link in obs.links:
+                if len(unvisited) >= max_pages:
+                    break
                 if not link.href:
                     continue
                 candidate = resolve_and_normalize(url, link.href)
@@ -345,8 +459,7 @@ def crawl_site(
                     continue
                 if candidate in visited or candidate in discovered:
                     continue
-                discovered.add(candidate)
-                queue.append((candidate, depth + 1))
+                _record_unvisited(candidate, "max_depth", depth + 1, url)
 
         pages.append(
             CrawlPageRecord(
@@ -356,6 +469,7 @@ def crawl_site(
                 is_success=obs.is_success,
                 error_message=obs.error_message,
                 observation=obs if obs.is_success else None,
+                discovery_sources=tuple(sorted(sources_by_url.get(url, ()))),
             )
         )
 
@@ -385,4 +499,6 @@ def crawl_site(
         pages_by_url=pages_by_url,
         is_success=is_success,
         error_message=start_error,
+        unvisited_urls=unvisited,
+        sitemap_discovery=discovery,
     )

@@ -27,6 +27,18 @@ __all__ = [
     "resolve_url",
     "SitemapDiscoveryResult",
     "discover_sitemap_urls",
+    "DISCOVERY_SOURCE_LINK",
+    "DISCOVERY_SOURCE_SITEMAP",
+    "DISCOVERY_SOURCE_START",
+    "UnvisitedUrlRecord",
+    "DEFAULT_MAX_REPRESENTATIVE_PAGES",
+    "RepresentativePage",
+    "SiteAuditContext",
+    "SiteInternalGraph",
+    "SiteStats",
+    "build_internal_graph",
+    "build_site_audit_context",
+    "select_representative_pages",
 ]
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
@@ -44,6 +56,18 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "resolve_url": ("src.crawler.url_utils", "resolve_url"),
     "SitemapDiscoveryResult": ("src.crawler.robots_sitemaps", "SitemapDiscoveryResult"),
     "discover_sitemap_urls": ("src.crawler.robots_sitemaps", "discover_sitemap_urls"),
+    "DISCOVERY_SOURCE_LINK": ("src.crawler.crawl_session", "DISCOVERY_SOURCE_LINK"),
+    "DISCOVERY_SOURCE_SITEMAP": ("src.crawler.crawl_session", "DISCOVERY_SOURCE_SITEMAP"),
+    "DISCOVERY_SOURCE_START": ("src.crawler.crawl_session", "DISCOVERY_SOURCE_START"),
+    "UnvisitedUrlRecord": ("src.crawler.crawl_session", "UnvisitedUrlRecord"),
+    "DEFAULT_MAX_REPRESENTATIVE_PAGES": ("src.crawler.site_context", "DEFAULT_MAX_REPRESENTATIVE_PAGES"),
+    "RepresentativePage": ("src.crawler.site_context", "RepresentativePage"),
+    "SiteAuditContext": ("src.crawler.site_context", "SiteAuditContext"),
+    "SiteInternalGraph": ("src.crawler.site_context", "SiteInternalGraph"),
+    "SiteStats": ("src.crawler.site_context", "SiteStats"),
+    "build_internal_graph": ("src.crawler.site_context", "build_internal_graph"),
+    "build_site_audit_context": ("src.crawler.site_context", "build_site_audit_context"),
+    "select_representative_pages": ("src.crawler.site_context", "select_representative_pages"),
 }
 
 
