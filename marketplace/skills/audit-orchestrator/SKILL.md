@@ -53,7 +53,17 @@ URL / AuditRequest
 
 ## Output Schema
 
-`run_audit` returns an `AuditResult`; `run_audit_full` returns `(AuditResult, AuditReport)`.
+Both `run_audit` and `run_audit_full` default to all six specialist audits.
+`run_audit` returns an `AuditResult`; `run_audit_full` is the designated complete marketplace entrypoint
+returning `(AuditResult, AuditReport)`. It adds objective mapping, priority engine, and structured
+reporting on top of the `run_audit` result.
+
+Default audit set (`_DEFAULT_AUDITS`):
+```
+machine_answerability, task_readiness, crawl_render, engagement, evidence_consistency, freshness_corroboration
+```
+Explicit audit selection (via `AuditRequest.audits` or `AuditOptions.audits`) overrides the default.
+
 The report serializes to:
 
 ```json
@@ -71,7 +81,14 @@ The report serializes to:
     "medium": 1,
     "low": 1
   },
-  "audits_run": ["machine_answerability", "task_readiness"],
+  "audits_run": [
+    "machine_answerability",
+    "task_readiness",
+    "crawl_render",
+    "engagement",
+    "evidence_consistency",
+    "freshness_corroboration"
+  ],
   "findings": [
     {
       "id": "TR-INT-001",
@@ -104,7 +121,7 @@ orchestrator registry by name with **no changes to the pipeline, aggregation, or
 
 1. Add the audit module.
 2. Register it in the audit registry under a stable name.
-3. Optionally add it to the default audit set.
+3. Add it to `_DEFAULT_AUDITS` to include it in the default run.
 
 Its findings then flow automatically through tagging, deduplication, priority ordering,
 and the final report. The orchestrator imposes no fixed audit count.

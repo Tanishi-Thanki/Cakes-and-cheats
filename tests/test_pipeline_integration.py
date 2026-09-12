@@ -296,14 +296,24 @@ class TestRealOrchestratorPipeline(unittest.TestCase):
         self._mock_get.return_value = response
 
     @patch("src.crawler.crawler.requests.get")
-    def test_default_execution_runs_ma_and_tr(self, mock_get: MagicMock) -> None:
+    def test_default_execution_runs_all_six_audits(self, mock_get: MagicMock) -> None:
         self._mock_get = mock_get
         self._mock_fetch("<html><head><title>Example</title></head><body><h1>Example</h1><p>Content here.</p></body></html>", "https://example.com/")
-        from src.orchestrator import run_audit_full
+        from src.orchestrator import _DEFAULT_AUDITS, run_audit
+        result = run_audit("https://example.com/")
+        self.assertTrue(result.is_success)
+        self.assertEqual(list(result.options.audits), list(_DEFAULT_AUDITS))
+        self.assertEqual(len(result.options.audits), 6)
+
+    @patch("src.crawler.crawler.requests.get")
+    def test_run_audit_full_defaults_to_all_six_audits(self, mock_get: MagicMock) -> None:
+        self._mock_get = mock_get
+        self._mock_fetch("<html><head><title>Example</title></head><body><h1>Example</h1><p>Content here.</p></body></html>", "https://example.com/")
+        from src.orchestrator import _DEFAULT_AUDITS, run_audit_full
         result, report = run_audit_full("https://example.com/")
         self.assertTrue(result.is_success)
-        self.assertEqual(list(result.options.audits), ["machine_answerability", "task_readiness"])
-        _ = report
+        self.assertEqual(list(result.options.audits), list(_DEFAULT_AUDITS))
+        self.assertEqual(report.audits_run, list(_DEFAULT_AUDITS))
 
     @patch("src.crawler.crawler.requests.get")
     def test_explicit_all_audits_report_and_json(self, mock_get: MagicMock) -> None:

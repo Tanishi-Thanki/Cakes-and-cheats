@@ -90,8 +90,16 @@ def _ensure_optional_audits_registered() -> None:
     _optional_audits_registered = True
 
 
-# Deterministic default execution order (preserves result ordering).
-_DEFAULT_AUDITS: tuple[str, ...] = ("machine_answerability", "task_readiness")
+# Deterministic default execution order — all six specialist audits run by default.
+# Explicit audit selection (via AuditRequest.audits or AuditOptions.audits) overrides this.
+_DEFAULT_AUDITS: tuple[str, ...] = (
+    "machine_answerability",
+    "task_readiness",
+    "crawl_render",
+    "engagement",
+    "evidence_consistency",
+    "freshness_corroboration",
+)
 
 # ---------------------------------------------------------------------------
 # Import AuditRequest for public API
@@ -460,18 +468,19 @@ def run_audit_full(
     url: Union[str, AuditRequest],
     options: Optional[AuditOptions] = None,
 ) -> tuple[AuditResult, AuditReport]:
-    """Execute a full audit pipeline and return both AuditResult and AuditReport.
+    """Execute the complete audit pipeline and return both AuditResult and AuditReport.
 
-    This is the extended entrypoint for consumers that need the full report
-    structure. It wires the downstream stages in fixed architecture order:
+    This is the designated marketplace entrypoint covering both AI discoverability
+    and on-site engagement. It builds on run_audit() — which already defaults to
+    all six specialist audits — and adds the downstream reasoning stages:
 
-        run_audit (fetch → observe → audits → aggregate)
+        run_audit (fetch → observe → all-six audits → aggregate)
             ↓ Objective Mapping    (map_findings_to_objectives)
             ↓ Priority Engine      (collect_signals → compute_priorities)
             ↓ Final Report         (build_report)
 
-    run_audit() itself is unchanged and remains the backward-compatible
-    entrypoint for callers that only need the AuditResult.
+    Explicit audit selection (via AuditRequest.audits or AuditOptions.audits) is
+    respected and passed through unchanged.
 
     Args:
         url: Target URL string or AuditRequest.
