@@ -54,6 +54,29 @@ from src.orchestrator import (
     run_audit,
     run_audit_full,
 )
+from unittest.mock import MagicMock
+
+def _make_mock_site_context(is_success=True, error_message=None, obs=None):
+    ctx = MagicMock()
+    ctx.normalized_start_url = "https://example.com/"
+    if obs is None:
+        obs = _make_observation(is_success=is_success, error_message=error_message)
+    if is_success:
+        ctx.observations = {"https://example.com/": obs}
+        page = MagicMock()
+        page.observation = obs
+        ctx.page_by_url = {"https://example.com/": page}
+    else:
+        ctx.observations = {}
+        ctx.page_by_url = {}
+    return ctx
+
+def _make_mock_crawl_result(is_success=True, error_message=None):
+    res = MagicMock()
+    res.is_success = is_success
+    res.error_message = error_message
+    return res
+
 
 
 # ---------------------------------------------------------------------------
@@ -121,14 +144,14 @@ class TestValidUrlPipeline(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_valid_url_produces_findings(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """1a: Valid URL with findings returns structured AuditResult."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [_make_finding("MA-IMG-001")]
         mock_tr.return_value = [_make_finding("TR-DATA-001")]
 
@@ -136,19 +159,19 @@ class TestValidUrlPipeline(unittest.TestCase):
 
         self.assertTrue(result.is_success)
         self.assertEqual(len(result.findings), 2)
-        mock_fetch.assert_called_once()
-        mock_observe.assert_called_once()
+        mock_crawl.assert_called_once()
+        mock_build.assert_called_once()
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_clean_page_returns_empty_findings(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """1b: Valid URL with no issues returns empty findings list."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = []
         mock_tr.return_value = []
 
@@ -159,14 +182,14 @@ class TestValidUrlPipeline(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_findings_carry_source_audit_attribution(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """1c: Findings in the result carry source_audit tags."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [_make_finding("MA-IMG-001")]
         mock_tr.return_value = [_make_finding("TR-DATA-001")]
 
@@ -188,15 +211,15 @@ class TestSharedObservation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_same_observation_identity(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """2a: Both audits receive the exact same obs instance."""
         canonical_obs = _make_observation()
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = canonical_obs
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context(obs=canonical_obs)
         mock_ma.return_value = []
         mock_tr.return_value = []
 
@@ -208,21 +231,21 @@ class TestSharedObservation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_fetch_called_once_observe_called_once(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """2b: fetch_page and observe_page each called exactly once."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [_make_finding("MA-001")]
         mock_tr.return_value = [_make_finding("TR-001")]
 
         run_audit("https://example.com/")
 
-        self.assertEqual(mock_fetch.call_count, 1)
-        self.assertEqual(mock_observe.call_count, 1)
+        self.assertEqual(mock_crawl.call_count, 1)
+        self.assertEqual(mock_build.call_count, 1)
 
 
 # ===========================================================================
@@ -234,14 +257,14 @@ class TestFindingAggregation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_findings_from_both_audits_present(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """3a: Both MA and TR findings appear in the combined result."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [
             _make_finding("MA-IMG-001", evidence="MA evidence."),
         ]
@@ -258,14 +281,14 @@ class TestFindingAggregation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_findings_sorted_by_priority_and_severity(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """3b: Aggregated findings are sorted (priority ASC, severity DESC)."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [
             _make_finding("MA-A", priority=2, severity="medium"),
         ]
@@ -290,15 +313,15 @@ class TestConservativeDeduplication(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_exact_duplicate_removed(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """4a: Same finding object from two audits → deduplicated to one."""
         shared = _make_finding("XX-001", evidence="Shared identical evidence.")
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [shared]
         mock_tr.return_value = [shared]
 
@@ -394,14 +417,14 @@ class TestAuditFailureIsolation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_one_audit_crash_preserves_others(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """6a: MA crashes → TR still runs, MA error recorded."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.side_effect = RuntimeError("MA internal crash.")
         mock_tr.return_value = [_make_finding("TR-DATA-001")]
 
@@ -414,14 +437,14 @@ class TestAuditFailureIsolation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_both_audits_crash_empty_findings(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """6b: Both audits crash → is_success still True, findings empty, both errors recorded."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.side_effect = RuntimeError("MA crash.")
         mock_tr.side_effect = RuntimeError("TR crash.")
 
@@ -435,14 +458,14 @@ class TestAuditFailureIsolation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_failed_audit_error_recorded_as_string(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """6c: Audit error is recorded as a string, not raised."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.side_effect = ValueError("Bad data.")
         mock_tr.return_value = []
 
@@ -461,13 +484,13 @@ class TestFetchFailureHandling(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_404_returns_failure_no_audits_run(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """7a: HTTP 404 → is_success=False, no audits run."""
-        mock_fetch.return_value = _make_fetched_page(
+        mock_crawl.return_value = _make_mock_crawl_result(
             is_success=False, error_message="HTTP error status 404."
         )
 
@@ -475,20 +498,20 @@ class TestFetchFailureHandling(unittest.TestCase):
 
         self.assertFalse(result.is_success)
         self.assertEqual(result.findings, [])
-        mock_observe.assert_not_called()
+        mock_build.assert_not_called()
         mock_ma.assert_not_called()
         mock_tr.assert_not_called()
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_observation_failure_stops_pipeline(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """7b: Observation exception → is_success=False, no audits run."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.side_effect = RuntimeError("Parse failure.")
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.side_effect = RuntimeError("Parse failure.")
 
         result = run_audit("https://example.com/")
 
@@ -498,14 +521,14 @@ class TestFetchFailureHandling(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_observation_is_success_false_stops(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """7c: Observation with is_success=False stops the pipeline."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation(is_success=False)
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context(is_success=False)
 
         result = run_audit("https://example.com/")
 
@@ -539,14 +562,14 @@ class TestTaskContextPreservation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_run_audit_accepts_audit_request(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """8b: run_audit(AuditRequest(...)) works correctly."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = []
         mock_tr.return_value = []
 
@@ -561,14 +584,14 @@ class TestTaskContextPreservation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_run_audit_full_returns_report(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """8c: run_audit_full returns both AuditResult and AuditReport with context."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [_make_finding("MA-001")]
         mock_tr.return_value = []
 
@@ -590,14 +613,14 @@ class TestTaskContextPreservation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_run_audit_full_wires_downstream_stages(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """8c2: Objective Mapping and Priority Engine run downstream of run_audit."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [
             _make_finding("P2-001", priority=2, severity="low"),
             _make_finding("P1-001", priority=1, severity="high"),
@@ -652,14 +675,14 @@ class TestFindingPreservation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_all_finding_fields_preserved(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """9a: Every field of a Finding survives orchestration."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
 
         original = Finding(
             id="MA-IMG-001",
@@ -699,14 +722,14 @@ class TestFindingPreservation(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_as_report_dict_includes_source_audit(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """9c: as_report_dict() includes source_audit field."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [_make_finding("MA-001")]
         mock_tr.return_value = []
 
@@ -753,14 +776,14 @@ class TestOptionalAuditExtensibility(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_selective_audit_execution(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """10d: Only selected audits run when AuditOptions.audits is specified."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [_make_finding("MA-001")]
         mock_tr.return_value = []
 
@@ -1015,14 +1038,14 @@ class TestMultiAuditIntegration(unittest.TestCase):
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
-    @patch("src.orchestrator.observe_page")
-    @patch("src.orchestrator.fetch_page")
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
     def test_all_four_audits_can_be_selected(
-        self, mock_fetch, mock_observe, mock_ma, mock_tr
+        self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
         """All 4 registered audits run when selected in options."""
-        mock_fetch.return_value = _make_fetched_page()
-        mock_observe.return_value = _make_observation()
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
         mock_ma.return_value = [_make_finding("MA-001")]
         mock_tr.return_value = [_make_finding("TR-001")]
 
