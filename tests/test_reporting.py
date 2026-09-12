@@ -17,6 +17,14 @@ Tests cover the 11 required cases for the final report schema:
 
 from __future__ import annotations
 
+
+import sys
+from pathlib import Path
+
+_RUNTIME_DIR = Path(__file__).resolve().parent.parent / "skills" / "audit-orchestrator" / "scripts" / "runtime"
+if _RUNTIME_DIR.is_dir() and str(_RUNTIME_DIR) not in sys.path:
+    sys.path.insert(0, str(_RUNTIME_DIR))
+
 import json
 import unittest
 

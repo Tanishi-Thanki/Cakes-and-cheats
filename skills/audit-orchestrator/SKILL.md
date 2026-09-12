@@ -1,5 +1,5 @@
 ---
-name: Audit Orchestrator
+name: audit-orchestrator
 description: Single composition and entrypoint layer for the marketplace. Fetches each audited URL once, observes it once, runs every registered audit against the same observation, conservatively aggregates findings, and emits the final structured report as JSON.
 ---
 

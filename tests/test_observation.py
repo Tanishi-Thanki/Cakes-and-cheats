@@ -1,5 +1,13 @@
 """Unit tests for the website observation layer."""
 
+
+import sys
+from pathlib import Path
+
+_RUNTIME_DIR = Path(__file__).resolve().parent.parent / "skills" / "audit-orchestrator" / "scripts" / "runtime"
+if _RUNTIME_DIR.is_dir() and str(_RUNTIME_DIR) not in sys.path:
+    sys.path.insert(0, str(_RUNTIME_DIR))
+
 import unittest
 
 from src.crawler.crawler import FetchedPage

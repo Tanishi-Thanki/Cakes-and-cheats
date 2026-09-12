@@ -1,0 +1,36 @@
+{
+  "name": "brand-ai-readiness-audit",
+  "version": "1.0.0",
+  "description": "Provider-neutral, deterministic audit skills evaluating machine answerability and task readiness for AI agents.",
+  "skills": [
+    {
+      "id": "audit-orchestrator",
+      "path": "skills/audit-orchestrator",
+      "entrypoint": true
+    },
+    {
+      "id": "crawl-render-audit",
+      "path": "skills/crawl-render-audit"
+    },
+    {
+      "id": "freshness-corroboration",
+      "path": "skills/freshness-corroboration"
+    },
+    {
+      "id": "engagement-audit",
+      "path": "skills/engagement-audit"
+    },
+    {
+      "id": "evidence-consistency-audit",
+      "path": "skills/evidence-consistency-audit"
+    },
+    {
+      "id": "machine-answerability-audit",
+      "path": "skills/machine-answerability-audit"
+    },
+    {
+      "id": "task-readiness-audit",
+      "path": "skills/task-readiness-audit"
+    }
+  ]
+}

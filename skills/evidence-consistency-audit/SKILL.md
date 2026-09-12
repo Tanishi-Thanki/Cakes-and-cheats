@@ -1,6 +1,5 @@
 ---
-name: Evidence & Consistency Audit
-status: available
+name: evidence-consistency-audit
 description: Extracts and preserves provider-neutral evidence facts (price, availability, name, brand, dates, attributes) into a shared FactInventory, classifies each evidence group across representations as MATCH/CONFLICT/HISTORICAL/AMBIGUOUS/INSUFFICIENT_EVIDENCE, and reports only meaningful cross-representation conflicts. Consumes the shared PageObservation; emits Finding objects.
 ---
 
@@ -8,7 +7,7 @@ description: Extracts and preserves provider-neutral evidence facts (price, avai
 
 > **STATUS: AVAILABLE — IMPLEMENTED**
 >
-> Implemented in `src/audits/evidence_consistency.py` as
+> Implemented in the bundled runtime (`skills/audit-orchestrator/scripts/runtime/src/audits/evidence_consistency.py`) as
 > `audit_evidence_consistency(obs) -> list[Finding]` and registered in the
 > orchestrator under the stable name `evidence_consistency` as part of the
 > default six-audit pipeline (callers may also explicitly select a subset via
