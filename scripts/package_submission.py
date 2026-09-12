@@ -37,6 +37,7 @@ EXCLUDE_DIRS: set[str] = {
     ".vscode",
     ".gemini",
     "output",
+    "live_reports",
 }
 
 EXCLUDE_EXTENSIONS: set[str] = {
@@ -60,6 +61,8 @@ def should_include(rel_path: Path) -> bool:
         if part.startswith(".git"):
             return False
     if rel_path.suffix.lower() in EXCLUDE_EXTENSIONS:
+        return False
+    if rel_path.name.startswith("live_"):
         return False
     return True
 

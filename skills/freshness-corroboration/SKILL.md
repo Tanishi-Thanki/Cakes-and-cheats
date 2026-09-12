@@ -1,5 +1,5 @@
 ---
-name: Freshness & Corroboration Audit
+name: freshness-corroboration
 description: Evaluates whether the facts on a page are internally consistent and whether available freshness signals give an agent reason to treat time-sensitive facts as current. Driver of the TRUST stage.
 ---
 

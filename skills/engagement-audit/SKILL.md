@@ -1,5 +1,5 @@
 ---
-name: Engagement Audit
+name: engagement-audit
 description: Evaluates post-click orientation and task continuity for users arriving from an AI referral or recommendation — whether the landing page supports orienting the visitor and continuing their intended task. Driver of the CONTINUE THE TASK stage.
 ---
 

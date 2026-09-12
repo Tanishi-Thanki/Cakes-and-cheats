@@ -1,5 +1,5 @@
 ---
-name: Machine Answerability Audit
+name: machine-answerability-audit
 description: Evaluates whether key website information can be found, read, and understood reliably by AI systems, based on observed structure, visible text, images, and structured metadata. Driver of the FIND -> READ -> UNDERSTAND stages.
 ---
 

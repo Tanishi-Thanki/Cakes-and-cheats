@@ -1,5 +1,5 @@
 ---
-name: Task Readiness Audit
+name: task-readiness-audit
 description: Evaluates whether a page structurally supports an agent actually completing a task — navigable actions, actionable endpoints, structured workflows, reachable authentication, and sufficient decision evidence. Driver of the DECIDE/RECOMMEND -> ARRIVE stages.
 ---
 

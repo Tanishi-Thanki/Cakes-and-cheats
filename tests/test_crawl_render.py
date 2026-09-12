@@ -1,6 +1,12 @@
 """Unit tests for the Crawl & Render Audit."""
 
+import sys
+from pathlib import Path
 import unittest
+
+_RUNTIME_DIR = Path(__file__).resolve().parent.parent / "skills" / "audit-orchestrator" / "scripts" / "runtime"
+if _RUNTIME_DIR.is_dir() and str(_RUNTIME_DIR) not in sys.path:
+    sys.path.insert(0, str(_RUNTIME_DIR))
 
 from src.audits.crawl_render import audit_crawl_render
 from src.audits.models import Finding
