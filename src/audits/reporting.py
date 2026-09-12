@@ -109,6 +109,14 @@ class AuditReport:
         Returns:
             Dict suitable for JSON serialization.
         """
+        has_task_context = bool(
+            (self.task_intent and self.task_intent.strip())
+            or (self.task_description and self.task_description.strip())
+            or self.target_objectives
+        )
+        mapping_by_id = {m.finding_id: m for m in self.objective_mappings}
+        signal_by_id = {s.finding_id: s for s in self.priority_signals}
+
         finding_dicts: list[dict[str, Any]] = []
         for f in self.findings:
             fd: dict[str, Any] = {
@@ -126,6 +134,12 @@ class AuditReport:
             }
             if f.details:
                 fd["details"] = f.details
+            if has_task_context:
+                m = mapping_by_id.get(f.id)
+                s = signal_by_id.get(f.id)
+                fd["affected_objectives"] = list(m.affected_objectives) if m else []
+                fd["task_relevance"] = m.task_relevance if m else "general"
+                fd["priority_reason"] = s.priority_reason if (s and s.priority_reason) else (m.relevance_reason if m else "")
             finding_dicts.append(fd)
 
         return {
@@ -155,8 +169,11 @@ class AuditReport:
         - ``summary``: deterministic counts — ``total_findings`` plus per-severity
           counts for ``high``/``medium``/``low``. A ``critical`` count is added
           only when critical findings exist so severity is never invented.
+        - ``task_context``: task intent, description, and target objectives when
+          supplied in the audit request context.
         - ``findings``: orchestrator-ordered findings with evidence, suggested
-          action, priority, confidence, and source attribution preserved.
+          action, priority, confidence, source attribution, and when task context
+          exists, affected_objectives, task_relevance, and priority_reason.
           Structured ``details`` are retained as structured data (never collapsed
           into an opaque string).
         - Failure state: when the pipeline failed, a concise structured
@@ -181,13 +198,37 @@ class AuditReport:
         if critical_count:
             summary["critical"] = critical_count
 
+        has_task_context = bool(
+            (self.task_intent and self.task_intent.strip())
+            or (self.task_description and self.task_description.strip())
+            or self.target_objectives
+        )
+        mapping_by_id = {m.finding_id: m for m in self.objective_mappings}
+        signal_by_id = {s.finding_id: s for s in self.priority_signals}
+
         result: dict[str, Any] = {
             "site": self.final_url or self.requested_url,
             "audited_at": self.audited_at,
-            "summary": summary,
-            "audits_run": list(self.audits_run),
-            "findings": [_finding_to_dict(f) for f in self.findings],
         }
+
+        if has_task_context:
+            result["task_context"] = {
+                "task_intent": self.task_intent,
+                "task_description": self.task_description,
+                "target_objectives": list(self.target_objectives),
+            }
+
+        result["summary"] = summary
+        result["audits_run"] = list(self.audits_run)
+        result["findings"] = [
+            _finding_to_dict(
+                f,
+                mapping=mapping_by_id.get(f.id),
+                signal=signal_by_id.get(f.id),
+                has_task_context=has_task_context,
+            )
+            for f in self.findings
+        ]
 
         if not self.is_success:
             result["failure"] = {
@@ -260,13 +301,23 @@ def _compute_summary(
     }
 
 
-def _finding_to_dict(finding: Finding) -> dict[str, Any]:
+def _finding_to_dict(
+    finding: Finding,
+    mapping: Optional[ObjectiveMapping] = None,
+    signal: Optional[PrioritySignal] = None,
+    has_task_context: bool = False,
+) -> dict[str, Any]:
     """Serialize one finding without loss, tolerating incomplete inputs.
 
     Preserves every field of the existing Finding contract: id, title,
     severity, evidence, suggested_action (summary + priority), priority,
     confidence, and source attribution. Structured ``details`` are kept as a
     structured dict when present.
+
+    When ``has_task_context`` is True, exposes:
+    - ``affected_objectives``: list of canonical objectives impacted.
+    - ``task_relevance``: direct_blocker | task_impairing | general.
+    - ``priority_reason``: transparent evidence-based priority rationale.
 
     Robustness (test: invalid/incomplete finding handling):
     - Missing/blank title falls back to the finding id rather than aborting.
@@ -278,6 +329,9 @@ def _finding_to_dict(finding: Finding) -> dict[str, Any]:
 
     Args:
         finding: A Finding (or Finding-like object) to serialize.
+        mapping: Optional ObjectiveMapping for task relevance and objectives.
+        signal: Optional PrioritySignal for priority rationale.
+        has_task_context: Whether task context was provided in the audit request.
 
     Returns:
         Plain dict with evidence and recommendations preserved.
@@ -316,6 +370,18 @@ def _finding_to_dict(finding: Finding) -> dict[str, Any]:
     details = getattr(finding, "details", None)
     if details:
         finding_dict["details"] = _json_safe(details)
+
+    if has_task_context:
+        affected_objectives = list(mapping.affected_objectives) if mapping else []
+        task_relevance = mapping.task_relevance if mapping else "general"
+        priority_reason = (
+            signal.priority_reason
+            if (signal and signal.priority_reason)
+            else (mapping.relevance_reason if mapping else "")
+        )
+        finding_dict["affected_objectives"] = affected_objectives
+        finding_dict["task_relevance"] = task_relevance
+        finding_dict["priority_reason"] = priority_reason
 
     return finding_dict
 
@@ -416,6 +482,17 @@ def build_report(
     Returns:
         Fully constructed AuditReport with computed summary.
     """
+    if priority_signals:
+        ordered_findings: list[Finding] = []
+        finding_pool = list(findings)
+        for sig in priority_signals:
+            for idx, f in enumerate(finding_pool):
+                if f.id == sig.finding_id:
+                    ordered_findings.append(finding_pool.pop(idx))
+                    break
+        ordered_findings.extend(finding_pool)
+        findings = ordered_findings
+
     summary = _compute_summary(findings, audits_run, audit_errors)
 
     return AuditReport(

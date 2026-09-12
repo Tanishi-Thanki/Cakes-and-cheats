@@ -513,6 +513,80 @@ class TestEvidenceConsistencyThroughFullChain(unittest.TestCase):
         self.assertIn("evidence_consistency", AUDIT_REGISTRY)
         self.assertTrue(callable(AUDIT_REGISTRY["evidence_consistency"]))
 
+    @patch("src.crawler.crawler.requests.get")
+    def test_audit_request_propagates_task_context_into_full_report(self, mock_get: MagicMock) -> None:
+        """21. run_audit_full propagates AuditRequest context into mapping, priority, and report."""
+        self._mock_get = mock_get
+        self._mock_fetch(self._CONFLICT_HTML, "https://example.com/shoes")
+        from src.audits.audit_request import AuditContext, AuditRequest
+        from src.orchestrator import run_audit_full
+
+        req = AuditRequest(
+            target_url="https://example.com/shoes",
+            context=AuditContext(
+                task_intent="compare prices across stores",
+                target_objectives=["price_evaluation"],
+            ),
+            audits=("evidence_consistency",),
+        )
+
+        result, report = run_audit_full(req)
+        self.assertTrue(result.is_success)
+
+        d = report.as_final_dict()
+        # Task context appears
+        self.assertIn("task_context", d)
+        self.assertEqual(d["task_context"]["task_intent"], "compare prices across stores")
+        self.assertEqual(d["task_context"]["target_objectives"], ["price_evaluation"])
+
+        # Finding is task-aware
+        f = d["findings"][0]
+        self.assertEqual(f["id"], "EVID-PRC-001")
+        self.assertIn("price_evaluation", f["affected_objectives"])
+        self.assertIn(f["task_relevance"], ("direct_blocker", "task_impairing"))
+        self.assertTrue(len(f["priority_reason"]) > 0)
+
+    @patch("src.crawler.crawler.requests.get")
+    def test_full_pipeline_task_aware_ordering(self, mock_get: MagicMock) -> None:
+        """22. Full pipeline elevates direct task blocker to the top of the report."""
+        self._mock_get = mock_get
+        # HTML with unnavigable buy link AND image missing alt text
+        html = """<!DOCTYPE html>
+        <html>
+        <head><title>Product</title></head>
+        <body>
+            <h1>Running Shoes</h1>
+            <p>Great shoes for running.</p>
+            <a href="#">Buy Now</a>
+            <img src="pic.jpg" alt="photo" />
+            <img src="banner.jpg" alt="banner" />
+        </body>
+        </html>"""
+        self._mock_fetch(html, "https://example.com/shoes")
+        from src.audits.audit_request import AuditContext, AuditRequest
+        from src.orchestrator import run_audit_full
+
+        req = AuditRequest(
+            target_url="https://example.com/shoes",
+            context=AuditContext(
+                task_intent="purchase running shoes",
+                target_objectives=["transaction_completion"],
+            ),
+            audits=("task_readiness", "machine_answerability"),
+        )
+
+        result, report = run_audit_full(req)
+        self.assertTrue(result.is_success)
+
+        d = report.as_final_dict()
+        finding_ids = [f["id"] for f in d["findings"]]
+        # If TR-INT-001 is present, it should be the direct blocker at the top
+        if "TR-INT-001" in finding_ids:
+            first_finding = d["findings"][0]
+            self.assertEqual(first_finding["id"], "TR-INT-001")
+            self.assertEqual(first_finding["task_relevance"], "direct_blocker")
+            self.assertIn("transaction_completion", first_finding["affected_objectives"])
+
 
 if __name__ == "__main__":
     unittest.main()

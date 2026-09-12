@@ -60,6 +60,11 @@ The report serializes to:
 {
   "site": "https://example.com/",
   "audited_at": null,
+  "task_context": {
+    "task_intent": "purchase running shoes",
+    "task_description": null,
+    "target_objectives": ["transaction_completion"]
+  },
   "summary": {
     "total_findings": 3,
     "high": 1,
@@ -69,14 +74,17 @@ The report serializes to:
   "audits_run": ["machine_answerability", "task_readiness"],
   "findings": [
     {
-      "id": "MA-IMG-001",
-      "title": "Image content dependency",
-      "severity": "medium",
+      "id": "TR-INT-001",
+      "title": "Critical task action affordance is non-navigable",
+      "severity": "high",
       "evidence": "Observed facts supporting the finding.",
-      "suggested_action": { "summary": "Remediation advice.", "priority": 2 },
-      "priority": 2,
+      "suggested_action": { "summary": "Remediation advice.", "priority": 1 },
+      "priority": 1,
       "confidence": "high",
-      "source_audit": "machine_answerability",
+      "source_audit": "task_readiness",
+      "affected_objectives": ["transaction_completion"],
+      "task_relevance": "direct_blocker",
+      "priority_reason": "Directly affects the requested transaction_completion objective because the purchase action is not navigable.",
       "details": { "structured": "diagnostics" }
     }
   ]
@@ -84,6 +92,7 @@ The report serializes to:
 ```
 
 - `audited_at` is only present when supplied by the caller — never auto-generated — so output is reproducible.
+- `task_context` and per-finding `affected_objectives`, `task_relevance`, and `priority_reason` are included when task context is supplied in `AuditRequest`. When no task context is supplied, the legacy schema is preserved.
 - On pipeline failure, a concise `failure` block (`url`, `status_code`, `message`) replaces any traceback.
 - Per-audit failures appear in `audit_errors`.
 
