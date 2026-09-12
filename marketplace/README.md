@@ -32,72 +32,84 @@ keywords.
 ## High-Level Architecture
 
 ```
-URL / AuditRequest
-  ↓
-Crawler            one read-only HTTP GET
-  ↓
-Observation        one deterministic HTML parse (no network)
+Audit Request (URL + optional task context)
   ↓
 Audit Orchestrator (entrypoint)
+  ↓
+Fetch              one read-only HTTP GET (respects robots.txt)
+  ↓
+Observe            one deterministic HTML parse (no network)
+  ↓
+Specialist Audits  (run against the shared observation)
   ├─ machine-answerability-audit      FIND / READ / UNDERSTAND
   ├─ task-readiness-audit             DECIDE / ARRIVE
+  ├─ crawl-render-audit               FIND / READ / TRUST
   ├─ engagement-audit                 CONTINUE THE TASK
   ├─ evidence-consistency-audit       EVIDENCE / TRUST
   └─ freshness-corroboration          TRUST
   ↓
-Aggregation        conservative dedup + priority ordering (source-tagged)
+Finding Aggregation conservative deduplication & source attribution
   ↓
-Reporting         final structured JSON report
+Objective Mapping  maps findings to task objectives & relevance
+  ↓
+Priority Engine    task-aware prioritization & transparent reasoning
+  ↓
+Final Report       unified structured JSON report
 ```
 
 ## Skill Decomposition
 
 | Skill | Stage | Responsibility |
 |-------|-------|----------------|
-| `audit-orchestrator` | entrypoint | Composition, aggregation, priority ordering, reporting |
+| `audit-orchestrator` | entrypoint | Composition, aggregation, objective mapping, priority engine, reporting |
 | `machine-answerability-audit` | FIND / READ / UNDERSTAND | Can key information be extracted and understood? |
 | `task-readiness-audit` | DECIDE / ARRIVE | Can the task actually be executed? |
+| `crawl-render-audit` | FIND / READ / TRUST | Reachability, protocol delivery, and client-side render accessibility |
 | `engagement-audit` | CONTINUE THE TASK | Does the page orient and continue the referred visitor? |
 | `evidence-consistency-audit` | EVIDENCE / TRUST | Shared evidence/provenance classification (MATCH / CONFLICT / AMBIGUOUS) behind trustworthy facts |
 | `freshness-corroboration` | TRUST | Are representations consistent and time-sensitive facts current? |
-| `crawl-render-audit` | FIND / READ / TRUST | Reachability, protocol delivery, and client-side render accessibility |
 
 Each audit skill is a thin, self-contained specification consuming the same `PageObservation`
 and emitting `Finding` objects. Skills do not depend on one another.
 
 ## Entrypoint Composition
 
-The marketplace has exactly **one entrypoint**: `audit-orchestrator`. It:
+The marketplace has exactly **one designated entrypoint**: `audit-orchestrator`. It:
 
-- Fetches each URL once (read-only) and observes it once.
-- Runs every registered audit against that shared observation.
-- Source-tags, conservatively deduplicates, and orders findings by audit-supplied priority/severity.
-- Emits the final report.
+- Receives the audit request with optional task context (`task_intent`, `task_description`, `target_objectives`).
+- Fetches each URL once (read-only, respecting `robots.txt`) and observes it once.
+- Runs all six specialist audits against that single shared observation (or an explicitly requested subset).
+- Conservatively deduplicates findings and attributes each to its source audit.
+- Executes **Objective Mapping** to link findings to affected user/task objectives.
+- Executes the **Priority Engine** to provide task-aware ranking and actionable priority reasons.
+- Emits the unified final report.
 
 New audits plug in by registering a conforming callable in the orchestrator — no pipeline
-or reporting changes required. The skill list therefore reflects what is actually registered.
+or reporting changes required.
 
 ## Final Report Concept
 
-The final report is a deterministic projection of existing structured data:
+The final report is a deterministic projection of structured data:
 
 - `site`, `audited_at` (caller-supplied only)
 - `summary` with `total_findings` and per-severity counts (high / medium / low, plus
   critical when present)
-- `findings` with title, severity, **full evidence**, priority, confidence, source audit,
-  `suggested_action`, and structured `details`
-- structured `failure` / `audit_errors` when the pipeline or an audit fails
+- `findings` with id, title, severity, **full evidence**, priority, confidence, source audit,
+  `suggested_action` (summary + priority), and structured `details`
+- `task_context`, `affected_objectives`, `task_relevance`, and `priority_reason` when task context is provided
+- structured `failure` / `audit_errors` when the pipeline or an individual audit fails
 
 Evidence is never truncated or collapsed into an opaque string. Severity and priority are
 the audits' own values — the report never invents them.
 
 ## How the Skills Work Together
 
-1. Crawl and observation produce one shared, deterministic view of the page.
-2. Each audit evaluates a different capability of that page for an automated agent.
-3. Findings are combined without loss; duplicates are collapsed conservatively.
-4. Priority ordering surfaces the most important findings first.
-5. The report is the single, JSON-serializable contract downstream consumers use.
+1. **Fetch & Observe**: Crawling respects `robots.txt` and produces one shared, deterministic observation.
+2. **Specialist Evaluation**: All six specialist audits evaluate different capabilities of the page using the shared observation.
+3. **Aggregation**: Findings are combined without loss and deduplicated conservatively.
+4. **Objective Mapping**: Findings are mapped to canonical objectives and task-specific intents.
+5. **Priority Engine**: Findings are prioritized by task relevance (direct blockers first) and severity with transparent rationales.
+6. **Unified Report**: The final report is emitted as the single, JSON-serializable contract for downstream consumers.
 
 ## Generalization Across Industries
 
