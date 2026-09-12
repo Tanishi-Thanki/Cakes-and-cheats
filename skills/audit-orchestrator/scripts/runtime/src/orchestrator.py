@@ -45,8 +45,11 @@ from src.audits.objective_mapping import map_findings_to_objectives
 from src.audits.priority_engine import collect_signals, compute_priorities
 from src.audits.reporting import AuditReport, build_report
 from src.audits.task_readiness import audit_task_readiness
-from src.crawler.crawler import DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, FetchedPage, fetch_page
-from src.observation.observation import PageObservation, observe_page
+from src.crawler.crawl_session import CrawlConfig, crawl_site
+from src.crawler.crawler import DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, FetchedPage
+from src.crawler.site_context import build_site_audit_context
+from src.observation.observation import PageObservation
+from src.audits.p2_audit import audit_p2_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -392,58 +395,64 @@ def run_audit(
     audit_names = _resolve_audit_names(options.audits)
 
     # ------------------------------------------------------------------
-    # Step 2 — Crawl (exactly one fetch_page call)
+    # Step 2 — Crawl (multi-page)
     # ------------------------------------------------------------------
-    fetched: FetchedPage = fetch_page(
-        target_url,
-        timeout=options.timeout_seconds,
+    config = CrawlConfig(
+        start_url=target_url,
+        timeout_seconds=options.timeout_seconds,
         user_agent=options.user_agent,
         check_robots=options.check_robots,
     )
+    crawl_result = crawl_site(config)
 
-    if not fetched.is_success:
+    if not crawl_result.is_success:
         return _failure_result(
             requested_url=target_url,
-            error_message=fetched.error_message or "Page fetch was unsuccessful.",
+            error_message=crawl_result.error_message or "Site crawl was unsuccessful.",
             options=options,
-            fetched=fetched,
         )
 
     # ------------------------------------------------------------------
-    # Step 3 — Observe (exactly one observe_page call)
+    # Step 3 — Site Context and Observations
     # ------------------------------------------------------------------
     try:
-        obs: PageObservation = observe_page(fetched)
+        site_context = build_site_audit_context(crawl_result)
     except Exception as exc:  # noqa: BLE001
         return _failure_result(
             requested_url=target_url,
-            error_message=f"Observation layer raised an unexpected exception: {exc}",
+            error_message=f"Context layer raised an unexpected exception: {exc}",
             options=options,
-            fetched=fetched,
         )
 
-    # observe_page() may succeed structurally but set is_success=False on the
-    # observation (e.g. HTML parse failure). Treat this as a pipeline failure.
-    if not obs.is_success:
+    observations = list(site_context.observations.values())
+    if not observations:
         return _failure_result(
             requested_url=target_url,
-            error_message=obs.error_message or "Observation of fetched page was unsuccessful.",
+            error_message="Observation of crawled pages was unsuccessful.",
             options=options,
-            fetched=fetched,
         )
 
     # ------------------------------------------------------------------
-    # Step 4 — Run each selected audit against THE SAME obs
-    #         Source-tag findings with originating audit name
+    # Step 4 — Run P2 + each selected audit against observations
     # ------------------------------------------------------------------
     audit_errors: dict[str, str] = {}
     all_findings: list[Finding] = []
 
+    # P2 runs on the complete observation collection
+    try:
+        p2_findings = audit_p2_evidence(observations)
+        all_findings.extend(tag_findings(p2_findings, source_audit="p2_evidence"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Audit 'p2_evidence' raised an unexpected exception: %s", exc)
+        audit_errors["p2_evidence"] = str(exc)
+
+    # Specialist audits run per-observation
     for name in audit_names:
         audit_fn = AUDIT_REGISTRY[name]
-        raw_findings = _run_audit_safe(audit_fn, obs, name, audit_errors)
-        tagged = tag_findings(raw_findings, source_audit=name)
-        all_findings.extend(tagged)
+        for obs in observations:
+            raw_findings = _run_audit_safe(audit_fn, obs, name, audit_errors)
+            tagged = tag_findings(raw_findings, source_audit=name)
+            all_findings.extend(tagged)
 
     # ------------------------------------------------------------------
     # Step 5 — Aggregate: deduplicate then sort
@@ -453,10 +462,16 @@ def run_audit(
     # ------------------------------------------------------------------
     # Step 6 — Return structured result
     # ------------------------------------------------------------------
+    start_obs = None
+    if site_context.normalized_start_url:
+        start_record = site_context.page_by_url.get(site_context.normalized_start_url)
+        if start_record and start_record.observation:
+            start_obs = start_record.observation
+
     return AuditResult(
         requested_url=target_url,
-        final_url=obs.final_url,
-        status_code=obs.status_code,
+        final_url=start_obs.final_url if start_obs else site_context.normalized_start_url,
+        status_code=start_obs.status_code if start_obs else None,
         is_success=True,
         error_message=None,
         findings=sorted_findings,

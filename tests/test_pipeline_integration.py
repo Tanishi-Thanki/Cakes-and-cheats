@@ -486,11 +486,11 @@ class TestEvidenceConsistencyThroughFullChain(unittest.TestCase):
         )
         self.assertTrue(result.is_success)
         self.assertEqual(list(result.options.audits), ["evidence_consistency"])
-        self.assertEqual([f.id for f in result.findings], ["EVID-PRC-001"])
+        self.assertEqual(set(f.id for f in result.findings), {"EVID-PRC-001", "EVID-001"})
 
         mappings = report.as_dict()["objective_mappings"]
-        self.assertEqual([m["finding_id"] for m in mappings], ["EVID-PRC-001"])
-        self.assertEqual([m["source_audit"] for m in mappings], ["evidence_consistency"])
+        self.assertEqual(set(m["finding_id"] for m in mappings), {"EVID-PRC-001", "EVID-001"})
+        self.assertEqual(set(m["source_audit"] for m in mappings), {"evidence_consistency", "p2_evidence"})
 
         signals = report.as_dict()["priority_signals"]
         signal = next(s for s in signals if s["finding_id"] == "EVID-PRC-001")
@@ -499,8 +499,8 @@ class TestEvidenceConsistencyThroughFullChain(unittest.TestCase):
         self.assertEqual(signal["source_audit"], "evidence_consistency")
 
         d = report.as_final_dict()
-        self.assertEqual(d["summary"]["total_findings"], 1)
-        self.assertEqual(d["summary"]["high"], 1)
+        self.assertEqual(d["summary"]["total_findings"], 2)
+        self.assertEqual(d["summary"]["high"], 2)
         f = d["findings"][0]
         self.assertEqual(f["id"], "EVID-PRC-001")
         self.assertEqual(f["source_audit"], "evidence_consistency")

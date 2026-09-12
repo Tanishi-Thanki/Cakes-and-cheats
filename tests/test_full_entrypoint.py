@@ -34,11 +34,38 @@ from src.audits.models import Finding, SuggestedAction
 from src.crawler.crawler import FetchedPage
 from src.observation.observation import PageObservation, PageSignals
 from src.orchestrator import (
-    _DEFAULT_AUDITS,
+    AUDIT_REGISTRY,
     AuditOptions,
+    AuditResult,
+    _DEFAULT_AUDITS,
+    _deduplicate_findings,
+    _sort_findings,
     run_audit,
     run_audit_full,
 )
+from unittest.mock import MagicMock
+
+def _make_mock_site_context(is_success=True, error_message=None, obs=None):
+    ctx = MagicMock()
+    ctx.normalized_start_url = "https://example.com/"
+    if obs is None:
+        obs = _make_observation(is_success=is_success, error_message=error_message)
+    if is_success:
+        ctx.observations = {"https://example.com/": obs}
+        page = MagicMock()
+        page.observation = obs
+        ctx.page_by_url = {"https://example.com/": page}
+    else:
+        ctx.observations = {}
+        ctx.page_by_url = {}
+    return ctx
+
+def _make_mock_crawl_result(is_success=True, error_message=None):
+    res = MagicMock()
+    res.is_success = is_success
+    res.error_message = error_message
+    return res
+
 
 # Convenience alias — _DEFAULT_AUDITS is the single canonical constant.
 _ALL_SIX = _DEFAULT_AUDITS
@@ -47,7 +74,7 @@ _ALL_SIX = _DEFAULT_AUDITS
 class TestUnifiedSixAuditPipeline(unittest.TestCase):
     """Test suite for the unified six-audit default pipeline."""
 
-    def _mock_fetched(
+    def _mock_crawled(
         self,
         html: str = "<html><head><title>Test</title></head><body><h1>Heading</h1><p>Body text</p></body></html>",
     ) -> FetchedPage:
@@ -80,10 +107,12 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             ),
         )
 
-    @patch("src.orchestrator.fetch_page")
-    def test_run_audit_defaults_to_all_six_audits(self, mock_fetch: MagicMock) -> None:
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_run_audit_defaults_to_all_six_audits(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+        mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
         """1. run_audit() with no options defaults to all six specialist audits."""
-        mock_fetch.return_value = self._mock_fetched()
+        mock_crawl.return_value = self._mock_crawled()
 
         res_str = run_audit("https://example.com/")
         self.assertTrue(res_str.is_success)
@@ -95,10 +124,12 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
         self.assertEqual(list(res_req.options.audits), list(_ALL_SIX))
         self.assertEqual(len(res_req.options.audits), 6)
 
-    @patch("src.orchestrator.fetch_page")
-    def test_run_audit_full_defaults_to_all_six_audits(self, mock_fetch: MagicMock) -> None:
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_run_audit_full_defaults_to_all_six_audits(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+        mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
         """2. run_audit_full() with no options also defaults to all six specialist audits."""
-        mock_fetch.return_value = self._mock_fetched()
+        mock_crawl.return_value = self._mock_crawled()
 
         res_str, rep_str = run_audit_full("https://example.com/")
         self.assertTrue(res_str.is_success)
@@ -112,10 +143,12 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
         self.assertEqual(list(res_req.options.audits), list(_ALL_SIX))
         self.assertEqual(rep_req.audits_run, list(_ALL_SIX))
 
-    @patch("src.orchestrator.fetch_page")
-    def test_all_six_audits_receive_same_observation(self, mock_fetch: MagicMock) -> None:
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_all_six_audits_receive_same_observation(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+        mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
         """3. All six specialist audits receive the identical PageObservation instance (single fetch)."""
-        mock_fetch.return_value = self._mock_fetched()
+        mock_crawl.return_value = self._mock_crawled()
 
         from src.orchestrator import AUDIT_REGISTRY, _ensure_optional_audits_registered
         _ensure_optional_audits_registered()
@@ -139,7 +172,7 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             self.assertTrue(res.is_success)
 
             # Exactly one HTTP fetch for all six audits
-            self.assertEqual(mock_fetch.call_count, 1)
+            self.assertEqual(mock_crawl.call_count, 1)
 
             # Each audit invoked exactly once
             for name in _ALL_SIX:
@@ -157,10 +190,12 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             AUDIT_REGISTRY.clear()
             AUDIT_REGISTRY.update(original_registry)
 
-    @patch("src.orchestrator.fetch_page")
-    def test_single_audit_failure_isolated_in_full_audit(self, mock_fetch: MagicMock) -> None:
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_single_audit_failure_isolated_in_full_audit(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+        mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
         """4. Failure in one audit does not crash the pipeline; remaining audits still run."""
-        mock_fetch.return_value = self._mock_fetched()
+        mock_crawl.return_value = self._mock_crawled()
 
         from src.orchestrator import AUDIT_REGISTRY, _ensure_optional_audits_registered
         _ensure_optional_audits_registered()
@@ -184,10 +219,12 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             AUDIT_REGISTRY.clear()
             AUDIT_REGISTRY.update(original_registry)
 
-    @patch("src.orchestrator.fetch_page")
-    def test_findings_from_all_six_audits_reach_unified_report(self, mock_fetch: MagicMock) -> None:
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_findings_from_all_six_audits_reach_unified_report(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+        mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
         """5. Findings produced by each of the six audits flow into the unified report."""
-        mock_fetch.return_value = self._mock_fetched()
+        mock_crawl.return_value = self._mock_crawled()
 
         from src.orchestrator import AUDIT_REGISTRY, _ensure_optional_audits_registered
         _ensure_optional_audits_registered()
@@ -242,10 +279,12 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             AUDIT_REGISTRY.clear()
             AUDIT_REGISTRY.update(original_registry)
 
-    @patch("src.orchestrator.fetch_page")
-    def test_objective_mapping_and_priority_ordering_with_all_six_audits(self, mock_fetch: MagicMock) -> None:
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_objective_mapping_and_priority_ordering_with_all_six_audits(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+        mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
         """6. Objective mapping and priority engine work correctly after all six audits run."""
-        mock_fetch.return_value = self._mock_fetched()
+        mock_crawl.return_value = self._mock_crawled()
 
         from src.orchestrator import AUDIT_REGISTRY, _ensure_optional_audits_registered
         _ensure_optional_audits_registered()
@@ -295,10 +334,12 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             AUDIT_REGISTRY.clear()
             AUDIT_REGISTRY.update(original_registry)
 
-    @patch("src.orchestrator.fetch_page")
-    def test_explicit_audit_selection_not_overridden(self, mock_fetch: MagicMock) -> None:
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_explicit_audit_selection_not_overridden(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+        mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
         """7. Explicit audit selections (via AuditRequest or AuditOptions) are respected."""
-        mock_fetch.return_value = self._mock_fetched()
+        mock_crawl.return_value = self._mock_crawled()
 
         # Via AuditRequest.audits — run_audit
         req = AuditRequest("https://example.com/", audits=("engagement", "evidence_consistency"))
@@ -320,10 +361,12 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
         self.assertEqual(list(res_opts_full.options.audits), ["crawl_render"])
         self.assertEqual(rep_opts_full.audits_run, ["crawl_render"])
 
-    @patch("src.orchestrator.fetch_page")
-    def test_final_report_schema_compliance(self, mock_fetch: MagicMock) -> None:
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_final_report_schema_compliance(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+        mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
         """8. Final report contains site, audited_at, summary, findings, and required finding fields."""
-        mock_fetch.return_value = self._mock_fetched()
+        mock_crawl.return_value = self._mock_crawled()
 
         from src.orchestrator import AUDIT_REGISTRY, _ensure_optional_audits_registered
         _ensure_optional_audits_registered()
