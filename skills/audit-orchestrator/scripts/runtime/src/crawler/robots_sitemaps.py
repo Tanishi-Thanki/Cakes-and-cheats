@@ -198,7 +198,12 @@ def discover_sitemap_urls(
         if depth > max_sitemap_depth or len(parsed_files) >= file_budget:
             return
 
-        fetched = fetcher(sitemap_url, timeout, user_agent, False)
+        try:
+            fetched = fetcher(sitemap_url, timeout, user_agent, False)
+        except Exception as exc:
+            # A raising text fetcher must never escape discovery.
+            _record_error("sitemap_fetch_failed", f"{sitemap_url}: {exc}")
+            return
         error_message = fetched.error_message or "fetch failed"
         if not fetched.is_success or not fetched.html_content:
             _record_error("sitemap_fetch_failed", f"{sitemap_url}: {error_message}")
@@ -248,15 +253,23 @@ def discover_sitemap_urls(
     robots_sitemap_urls: list[str] = []
     robots_fetched = False
 
-    robots_resp = fetcher(robots_url, timeout, user_agent, False)
-    if robots_resp.is_success and robots_resp.html_content:
-        robots_fetched = True
-        for record in parse_robots_sitemap_records(robots_resp.html_content):
-            candidate = _resolve_loc(robots_url, record, scope_url)
-            if candidate is not None and candidate not in robots_sitemap_urls:
-                robots_sitemap_urls.append(candidate)
-    elif not robots_resp.is_success:
-        _record_error("robots_fetch_failed", f"{robots_url}: {robots_resp.error_message or 'fetch failed'}")
+    robots_resp: Optional[FetchedPage] = None
+    try:
+        robots_resp = fetcher(robots_url, timeout, user_agent, False)
+    except Exception as exc:
+        _record_error("robots_fetch_failed", f"{robots_url}: {exc}")
+    if robots_resp is not None:
+        if robots_resp.is_success and robots_resp.html_content:
+            robots_fetched = True
+            for record in parse_robots_sitemap_records(robots_resp.html_content):
+                candidate = _resolve_loc(robots_url, record, scope_url)
+                if candidate is not None and candidate not in robots_sitemap_urls:
+                    robots_sitemap_urls.append(candidate)
+        elif not robots_resp.is_success:
+            _record_error(
+                "robots_fetch_failed",
+                f"{robots_url}: {robots_resp.error_message or 'fetch failed'}",
+            )
 
     candidates: list[str] = list(robots_sitemap_urls)
     conventional_checked = False

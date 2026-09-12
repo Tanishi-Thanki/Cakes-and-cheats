@@ -76,6 +76,8 @@ def _classify_error(message: Optional[str]) -> str:
         ("timed out", "timeout"),
         ("SSL", "ssl_error"),
         ("Too many redirects", "too_many_redirects"),
+        ("Fetch raised unexpected exception", "fetch_exception"),
+        ("Observation raised unexpected exception", "observation_error"),
         ("HTTP error status", "http_error"),
         ("Invalid URL", "invalid_url"),
         ("non-HTML", "non_html"),
@@ -389,7 +391,20 @@ def crawl_site(
         pages_attempted = len(visited_order)
         max_depth_reached = max(max_depth_reached, depth)
 
-        fetched = fetcher(url, config.timeout_seconds, config.user_agent, config.check_robots)
+        try:
+            fetched = fetcher(url, config.timeout_seconds, config.user_agent, config.check_robots)
+        except Exception as exc:
+            # A raising fetcher must never escape the crawl boundary: convert
+            # it into a structured per-page failure and continue.
+            fetched = FetchedPage(
+                requested_url=url,
+                final_url="",
+                status_code=None,
+                content_type="",
+                html_content="",
+                is_success=False,
+                error_message=f"Fetch raised unexpected exception: {exc}",
+            )
 
         if not fetched.is_success:
             error_message = fetched.error_message or "Page fetch was unsuccessful."
@@ -416,7 +431,30 @@ def crawl_site(
         if url == start_norm:
             is_success = True
 
-        obs = observer(fetched)
+        try:
+            obs = observer(fetched)
+        except Exception as exc:
+            # A raising observer must never escape the crawl boundary: record
+            # the page as a structured failure and continue the crawl.
+            obs_message = f"Observation raised unexpected exception: {exc}"
+            pages.append(
+                CrawlPageRecord(
+                    url=url,
+                    depth=depth,
+                    status_code=fetched.status_code,
+                    is_success=False,
+                    error_message=obs_message,
+                    observation=None,
+                    discovery_sources=tuple(sorted(sources_by_url.get(url, ()))),
+                )
+            )
+            category = _classify_error(obs_message)
+            error_counts[category] = error_counts.get(category, 0) + 1
+            if len(error_samples) < MAX_ERROR_SAMPLES:
+                error_samples.append(f"{url}: {obs_message}")
+            if url == start_norm and not is_success:
+                start_error = obs_message
+            continue
 
         if obs.is_success and obs.links and depth + 1 <= max_depth:
             budget_exhausted = False
