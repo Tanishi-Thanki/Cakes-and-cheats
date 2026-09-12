@@ -491,19 +491,20 @@ def run_audit_full(
         task_description = url.context.task_description
         target_objectives = url.context.target_objectives
 
-    # Objective Mapping — conservative: no semantic links claimed until
-    # evidence-based matching exists (affected_objectives always empty).
+    # Objective Mapping — evaluates findings against requested objectives and task intent
     objective_mappings = map_findings_to_objectives(
         result.findings,
         target_objectives=target_objectives or None,
+        task_intent=task_intent,
+        task_description=task_description,
     )
 
-    # Priority Engine — conservative: orders by audit-supplied priority and
-    # severity only; no invented weighted scoring.
+    # Priority Engine — computes task-aware ranking and evidence-based rationale
     priority_signals = compute_priorities(
         collect_signals(
             result.findings,
             affected_url=result.final_url or result.requested_url,
+            objective_mappings=objective_mappings,
         )
     )
 

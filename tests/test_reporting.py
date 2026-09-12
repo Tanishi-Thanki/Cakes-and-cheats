@@ -527,5 +527,120 @@ class TestInvalidIncompleteFindingHandling(unittest.TestCase):
         self.assertEqual(result, "WeirdObject")
 
 
+# ===========================================================================
+# 12. Task-Aware Reporting (cases 15-20)
+# ===========================================================================
+
+class TestTaskAwareReporting(unittest.TestCase):
+    """Tests for task-aware reporting serialization and schema."""
+
+    def test_task_context_appears_when_supplied(self) -> None:
+        """15. task_context block appears in as_final_dict when supplied in report."""
+        f = _make_finding(rule_id="TR-INT-001")
+        report = build_report(
+            requested_url="https://example.com/",
+            final_url="https://example.com/",
+            status_code=200,
+            is_success=True,
+            error_message=None,
+            findings=[f],
+            audit_errors={},
+            audits_run=["task_readiness"],
+            task_intent="purchase shoes",
+            task_description="buying sneakers online",
+            target_objectives=["transaction_completion"],
+        )
+        d = report.as_final_dict()
+        self.assertIn("task_context", d)
+        self.assertEqual(d["task_context"]["task_intent"], "purchase shoes")
+        self.assertEqual(d["task_context"]["task_description"], "buying sneakers online")
+        self.assertEqual(d["task_context"]["target_objectives"], ["transaction_completion"])
+
+    def test_task_aware_fields_appear_on_findings(self) -> None:
+        """16, 17, 18, 19: affected_objectives, task_relevance, priority_reason appear and details remain intact."""
+        from src.audits.objective_mapping import ObjectiveMapping
+        from src.audits.priority_engine import PrioritySignal
+
+        f = Finding(
+            id="TR-INT-001",
+            title="Non-navigable action affordance",
+            severity="critical",
+            evidence="Evidence for non-navigable buy button.",
+            suggested_action=SuggestedAction(summary="Fix link", priority=1),
+            priority=1,
+            confidence="high",
+            source_audit="task_readiness",
+            details={"button_selector": "#buy-btn"},
+        )
+        m = ObjectiveMapping(
+            finding_id="TR-INT-001",
+            source_audit="task_readiness",
+            affected_objectives=["transaction_completion"],
+            task_relevance="direct_blocker",
+            relevance_reason="Blocks purchase.",
+        )
+        s = PrioritySignal(
+            finding_id="TR-INT-001",
+            finding_title=f.title,
+            severity=f.severity,
+            confidence=f.confidence,
+            priority=f.priority,
+            source_audit=f.source_audit,
+            affected_url="https://example.com/",
+            task_relevance="direct_blocker",
+            priority_reason="Direct blocker for transaction_completion.",
+            affected_objectives=["transaction_completion"],
+        )
+
+        report = build_report(
+            requested_url="https://example.com/",
+            final_url="https://example.com/",
+            status_code=200,
+            is_success=True,
+            error_message=None,
+            findings=[f],
+            audit_errors={},
+            audits_run=["task_readiness"],
+            task_intent="buy shoes",
+            target_objectives=["transaction_completion"],
+            objective_mappings=[m],
+            priority_signals=[s],
+        )
+
+        d = report.as_final_dict()
+        self.assertEqual(len(d["findings"]), 1)
+        fd = d["findings"][0]
+
+        # Case 16: affected_objectives
+        self.assertEqual(fd["affected_objectives"], ["transaction_completion"])
+        # Case 17: task_relevance
+        self.assertEqual(fd["task_relevance"], "direct_blocker")
+        # Case 18: priority_reason
+        self.assertEqual(fd["priority_reason"], "Direct blocker for transaction_completion.")
+        # Case 19: details preserved
+        self.assertEqual(fd["details"], {"button_selector": "#buy-btn"})
+        self.assertEqual(fd["evidence"], "Evidence for non-navigable buy button.")
+        self.assertEqual(fd["confidence"], "high")
+
+    def test_no_context_report_remains_backward_compatible(self) -> None:
+        """20. When no task context is supplied, as_final_dict omits task_context and finding task fields."""
+        f = _make_finding(rule_id="TR-INT-001")
+        report = build_report(
+            requested_url="https://example.com/",
+            final_url="https://example.com/",
+            status_code=200,
+            is_success=True,
+            error_message=None,
+            findings=[f],
+            audit_errors={},
+            audits_run=["task_readiness"],
+        )
+        d = report.as_final_dict()
+        self.assertNotIn("task_context", d)
+        self.assertNotIn("affected_objectives", d["findings"][0])
+        self.assertNotIn("task_relevance", d["findings"][0])
+        self.assertNotIn("priority_reason", d["findings"][0])
+
+
 if __name__ == "__main__":
     unittest.main()
