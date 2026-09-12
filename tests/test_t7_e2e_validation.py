@@ -391,7 +391,7 @@ def _hostile_links() -> str:
         '<a href="tel:+1234">tel</a>',
         f'<a href="{HOSTILE}:abc/bad-port">bad port</a>',
         f'<a href="{HOSTILE}/caf\u00e9/\u2603/very-long-path">unicode</a>',
-        f'<a href="{HOSTILE}/{'a' * 400}">long</a>',
+        f'<a href="{HOSTILE}/{"a" * 400}">long</a>',
     ]
     for i in range(250):
         parts.append(f'<a href="/x{i}">x{i}</a>')
