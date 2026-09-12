@@ -178,9 +178,10 @@ class TestObservation(unittest.TestCase):
         self.assertEqual(link_mail.href, "mailto:support@example.com")
         self.assertFalse(link_mail.is_internal)
 
-        # 5. Fragment anchor link on same page
+        # 5. Fragment anchor link on same page — normalized: fragment removed (P1-T3)
         link_hash = obs.links[4]
-        self.assertEqual(link_hash.href, "https://example.com/shop#specifications")
+        self.assertEqual(link_hash.raw_href, "#specifications")
+        self.assertEqual(link_hash.href, "https://example.com/shop")
         self.assertTrue(link_hash.is_internal)
 
     def test_image_extraction(self) -> None:

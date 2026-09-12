@@ -1,11 +1,13 @@
 """Website fetching layer for single-page audit pipeline.
 
 Fetches the raw HTML content of a single target web page using read-only HTTP GET.
+Also provides ``fetch_text`` for text/XML site-metadata resources (robots.txt,
+sitemap files) through the same single HTTP layer.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 import urllib.parse
 import urllib.robotparser
@@ -22,6 +24,16 @@ HTML_CONTENT_TYPES: tuple[str, ...] = (
     "application/xhtml+xml",
 )
 
+# Accepted text/XML MIME types for metadata fetches (robots.txt, sitemaps).
+TEXT_CONTENT_TYPES: tuple[str, ...] = (
+    "text/html",
+    "text/plain",
+    "text/xml",
+    "application/xml",
+    "application/rss+xml",
+    "application/atom+xml",
+)
+
 
 @dataclass(frozen=True)
 class FetchedPage:
@@ -35,6 +47,9 @@ class FetchedPage:
         html_content: Raw decoded HTML string (empty if fetch failed or content was not HTML).
         is_success: True if HTTP GET succeeded, status code is 2xx, and content is HTML.
         error_message: Explanatory error details if is_success is False.
+        response_headers: Raw response headers (string values) when a response was
+            received; empty dict otherwise. Used by the observation layer for
+            X-Robots-Tag and other metadata; never required for fetch success.
     """
 
     requested_url: str
@@ -44,6 +59,25 @@ class FetchedPage:
     html_content: str
     is_success: bool
     error_message: Optional[str] = None
+    response_headers: dict[str, str] = field(default_factory=dict)
+
+
+def _extract_response_headers(response) -> dict[str, str]:
+    """Extract a plain string-value dict of response headers, never raising.
+
+    Tolerates mocked/minimal response objects (which may expose no usable
+    ``headers`` mapping) used by offline tests.
+    """
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return {}
+    try:
+        items = headers.items() if hasattr(headers, "items") else None
+        if items is None:
+            return {}
+        return {str(key): str(value) for key, value in items if key is not None}
+    except Exception:
+        return {}
 
 
 def _is_html_content_type(content_type_header: str) -> bool:
@@ -52,6 +86,14 @@ def _is_html_content_type(content_type_header: str) -> bool:
         return False
     media_type = content_type_header.split(";")[0].strip().lower()
     return media_type in HTML_CONTENT_TYPES
+
+
+def _is_text_content_type(content_type_header: str) -> bool:
+    """Check whether the Content-Type header corresponds to a text or XML response."""
+    if not content_type_header:
+        return False
+    media_type = content_type_header.split(";")[0].strip().lower()
+    return media_type in TEXT_CONTENT_TYPES or media_type.endswith("+xml")
 
 
 def check_robots_txt(
@@ -251,6 +293,7 @@ def fetch_page(
     final_url = response.url or clean_url
     status_code = response.status_code
     content_type = response.headers.get("Content-Type", "")
+    response_headers = _extract_response_headers(response)
 
     # Check for HTTP error status codes (not in 2xx range)
     if not (200 <= status_code < 300):
@@ -262,6 +305,7 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message=f"HTTP error status {status_code} ({response.reason or 'Unsuccessful'}).",
+            response_headers=response_headers,
         )
 
     # Check for HTML content type
@@ -274,6 +318,7 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message=f"Rejected non-HTML response (Content-Type: '{content_type}').",
+            response_headers=response_headers,
         )
 
     # 4. Safely extract decoded text
@@ -288,6 +333,7 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message=f"Failed to decode response content: {err}",
+            response_headers=response_headers,
         )
 
     return FetchedPage(
@@ -298,4 +344,178 @@ def fetch_page(
         html_content=html_text,
         is_success=True,
         error_message=None,
+        response_headers=response_headers,
+    )
+
+
+def fetch_text(
+    url: str,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    user_agent: str = DEFAULT_USER_AGENT,
+    check_robots: bool = False,
+) -> FetchedPage:
+    """Fetch a text/XML resource (robots.txt, sitemap.xml) via read-only HTTP GET.
+
+    Sibling of :func:`fetch_page` used for site metadata discovery. It accepts
+    text/plain and XML content types (where ``fetch_page`` intentionally rejects
+    non-HTML) so robots.txt and sitemap files can be read through the same single
+    HTTP layer.
+
+    ``check_robots`` is accepted for signature compatibility with the crawler's
+    ``FetcherCallable`` seam but is ignored: robots.txt cannot disallow itself,
+    and sitemap files are site metadata fetched under the same read-only policy.
+
+    Returns:
+        FetchedPage with ``is_success`` True only for 2xx text/XML responses.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return FetchedPage(
+            requested_url=url if isinstance(url, str) else str(url),
+            final_url="",
+            status_code=None,
+            content_type="",
+            html_content="",
+            is_success=False,
+            error_message="Invalid URL: URL must be a non-empty string.",
+        )
+
+    clean_url = url.strip()
+    try:
+        parsed = urllib.parse.urlparse(clean_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return FetchedPage(
+                requested_url=clean_url,
+                final_url="",
+                status_code=None,
+                content_type="",
+                html_content="",
+                is_success=False,
+                error_message=f"Invalid URL: '{clean_url}' must start with http:// or https:// and have a valid host.",
+            )
+    except Exception as err:
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url="",
+            status_code=None,
+            content_type="",
+            html_content="",
+            is_success=False,
+            error_message=f"Invalid URL syntax: {err}",
+        )
+
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "text/plain,text/xml,application/xml,application/rss+xml,application/atom+xml,*/*;q=0.1",
+    }
+
+    try:
+        response = requests.get(
+            clean_url,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+    except requests.exceptions.Timeout as err:
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url="",
+            status_code=None,
+            content_type="",
+            html_content="",
+            is_success=False,
+            error_message=f"Request timed out after {timeout}s: {err}",
+        )
+    except requests.exceptions.SSLError as err:
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url="",
+            status_code=None,
+            content_type="",
+            html_content="",
+            is_success=False,
+            error_message=f"SSL certificate validation failed: {err}",
+        )
+    except requests.exceptions.ConnectionError as err:
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url="",
+            status_code=None,
+            content_type="",
+            html_content="",
+            is_success=False,
+            error_message=f"Connection error: {err}",
+        )
+    except requests.exceptions.RequestException as err:
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url="",
+            status_code=None,
+            content_type="",
+            html_content="",
+            is_success=False,
+            error_message=f"HTTP request failed: {err}",
+        )
+    except Exception as err:
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url="",
+            status_code=None,
+            content_type="",
+            html_content="",
+            is_success=False,
+            error_message=f"Unexpected error while fetching URL: {err}",
+        )
+
+    final_url = response.url or clean_url
+    status_code = response.status_code
+    content_type = response.headers.get("Content-Type", "")
+    response_headers = _extract_response_headers(response)
+
+    if not (200 <= status_code < 300):
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url=final_url,
+            status_code=status_code,
+            content_type=content_type,
+            html_content="",
+            is_success=False,
+            error_message=f"HTTP error status {status_code} ({response.reason or 'Unsuccessful'}).",
+            response_headers=response_headers,
+        )
+
+    if not _is_text_content_type(content_type):
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url=final_url,
+            status_code=status_code,
+            content_type=content_type,
+            html_content="",
+            is_success=False,
+            error_message=f"Rejected non-text response (Content-Type: '{content_type}').",
+            response_headers=response_headers,
+        )
+
+    try:
+        text_content = response.text
+    except Exception as err:
+        return FetchedPage(
+            requested_url=clean_url,
+            final_url=final_url,
+            status_code=status_code,
+            content_type=content_type,
+            html_content="",
+            is_success=False,
+            error_message=f"Failed to decode response content: {err}",
+            response_headers=response_headers,
+        )
+
+    return FetchedPage(
+        requested_url=clean_url,
+        final_url=final_url,
+        status_code=status_code,
+        content_type=content_type,
+        html_content=text_content,
+        is_success=True,
+        error_message=None,
+        response_headers=response_headers,
     )

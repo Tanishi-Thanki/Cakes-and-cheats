@@ -18,6 +18,7 @@ import urllib.parse
 from bs4 import BeautifulSoup
 
 from src.crawler.crawler import FetchedPage
+from src.crawler.url_utils import resolve_and_normalize
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,10 @@ class LinkObservation:
     """Observed hyperlink within the page.
 
     Attributes:
-        href: Fully resolved absolute URL (or original if unresolvable).
+        href: Fully resolved, normalized absolute URL (or original if
+            unresolvable). Normalization reuses the crawler URL utilities:
+            hosts are lowercased, default ports are dropped, and fragments are
+            removed so duplicate/fragment-only links collapse to one target.
         raw_href: The exact attribute value present in the href attribute.
         anchor_text: Cleaned, visible text inside the anchor element.
         is_internal: True if the link shares the same hostname as the final page URL,
@@ -119,6 +123,16 @@ class PageObservation:
         tables: List of observed tables with structured row/cell data.
         json_ld: List of observed JSON-LD script blocks (parsed and raw).
         signals: Quantitative summary of page elements.
+        content_type: Content-Type of the fetched response, if known.
+        response_headers: Response headers (string values), if known.
+        robots_meta_raw: Raw content of <meta name="robots">, or None.
+        robots_meta_directives: Normalized robots meta directive tokens.
+        x_robots_tag_raw: Raw X-Robots-Tag header value(s), or None.
+        x_robots_tag_directives: Normalized X-Robots-Tag directive tokens.
+        og_title: Content of og:title, or None.
+        og_description: Content of og:description, or None.
+        og_type: Content of og:type, or None.
+        og_url: Resolved content of og:url, or None.
     """
 
     # 1. URL information
@@ -160,6 +174,22 @@ class PageObservation:
         )
     )
 
+    # 7. Response metadata (P1-T3 enrichment)
+    content_type: str = ""
+    response_headers: dict[str, str] = field(default_factory=dict)
+
+    # 8. Robots / indexability metadata (observable directives only — no judgment)
+    robots_meta_raw: Optional[str] = None
+    robots_meta_directives: tuple[str, ...] = ()
+    x_robots_tag_raw: Optional[str] = None
+    x_robots_tag_directives: tuple[str, ...] = ()
+
+    # 9. Basic Open Graph metadata
+    og_title: Optional[str] = None
+    og_description: Optional[str] = None
+    og_type: Optional[str] = None
+    og_url: Optional[str] = None
+
     # Convenience properties
     @property
     def has_title(self) -> bool:
@@ -188,6 +218,21 @@ class PageObservation:
     @property
     def num_headings(self) -> int:
         return self.signals.num_headings
+
+    @property
+    def has_robots_meta(self) -> bool:
+        return bool(self.robots_meta_directives)
+
+    @property
+    def has_x_robots_tag(self) -> bool:
+        return bool(self.x_robots_tag_directives)
+
+    @property
+    def has_open_graph(self) -> bool:
+        return any(
+            value is not None
+            for value in (self.og_title, self.og_description, self.og_type, self.og_url)
+        )
 
 
 def _resolve_url(base_url: str, relative_url: str) -> str:
@@ -236,6 +281,103 @@ def _clean_text(raw_text: Optional[str]) -> str:
     if not raw_text:
         return ""
     return " ".join(raw_text.split())
+
+
+def _normalize_directives(raw_value: Optional[str]) -> tuple[str, ...]:
+    """Normalize robots meta / X-Robots-Tag content into deterministic tokens.
+
+    Rules (each identity-preserving for directive names):
+    - lowercased;
+    - split on commas, then on whitespace;
+    - a user-agent-qualified directive keeps only its directive portion
+      (``googlebot: none`` -> ``none``), using a known UA-prefix set;
+    - a directive with a parameter keeps only the directive name
+      (``max-image-preview:large`` -> ``max-image-preview``,
+      ``unavailable_after: 2024-01-01`` -> ``unavailable_after``);
+    - duplicates removed, first-seen order preserved.
+    """
+    if not raw_value:
+        return ()
+    robot_user_agents = {
+        "google", "googlebot", "googlebot-news", "googlebot-video",
+        "googlebot-image", "bingbot", "bing", "yahoo", "slurp",
+        "yandex", "yandexbot", "baiduspider", "duckduckbot", "msnbot",
+        "ia_archiver", "archive.org_bot", "applebot", "ahrefsbot",
+        "semrushbot", "mj12bot", "pingdombot", "uptimerobot", "facebookexternalhit",
+    }
+    seen: list[str] = []
+    for segment in raw_value.split(","):
+        token = segment.strip().lower()
+        if not token:
+            continue
+        if ":" in token:
+            left, _, right = token.partition(":")
+            left = left.strip()
+            right = right.strip()
+            if left in robot_user_agents:
+                # UA-qualified directive: keep only the directive portion.
+                token = right
+            else:
+                # Directive with a parameter: keep only the directive name.
+                token = left
+            if not token:
+                continue
+        for word in token.split():
+            word = word.strip()
+            if word and word not in seen:
+                seen.append(word)
+    return tuple(seen)
+
+
+def _extract_robots_meta(soup: BeautifulSoup) -> tuple[Optional[str], tuple[str, ...]]:
+    """Extract robots meta directives: raw content plus normalized tokens."""
+    contents: list[str] = []
+    for meta in soup.find_all("meta"):
+        name_attr = (meta.get("name") or "").strip().lower()
+        if name_attr != "robots":
+            continue
+        content = (meta.get("content") or "").strip()
+        if content:
+            contents.append(content)
+    if not contents:
+        return None, ()
+    raw = ", ".join(contents)
+    return raw, _normalize_directives(raw)
+
+
+def _extract_x_robots_tag(response_headers: dict[str, str]) -> tuple[Optional[str], tuple[str, ...]]:
+    """Extract X-Robots-Tag directives from response headers (case-insensitive)."""
+    values: list[str] = []
+    for key, value in response_headers.items():
+        if str(key).strip().lower() == "x-robots-tag":
+            value_str = str(value)
+            if value_str.strip():
+                values.append(value_str.strip())
+    if not values:
+        return None, ()
+    raw = "; ".join(values)
+    return raw, _normalize_directives(raw)
+
+
+def _extract_open_graph(soup: BeautifulSoup, base_url: str) -> dict[str, Optional[str]]:
+    """Extract the four most useful Open Graph fields (property or name attr)."""
+    result: dict[str, Optional[str]] = {
+        "og:title": None,
+        "og:description": None,
+        "og:type": None,
+        "og:url": None,
+    }
+    for meta in soup.find_all("meta"):
+        prop_attr = str(meta.get("property") or meta.get("name") or "").strip().lower()
+        if prop_attr not in result:
+            continue
+        content = (meta.get("content") or "").strip()
+        if not content:
+            continue
+        if prop_attr == "og:url":
+            content = _resolve_url(base_url, content)
+        result[prop_attr] = content
+    return result
 
 
 def _extract_headings(soup: BeautifulSoup, tag_name: str) -> list[str]:
@@ -303,6 +445,16 @@ def observe_page(page: FetchedPage) -> PageObservation:
                 num_tables=0,
                 num_headings=0,
             ),
+            content_type=page.content_type,
+            response_headers=dict(page.response_headers or {}),
+            robots_meta_raw=None,
+            robots_meta_directives=(),
+            x_robots_tag_raw=None,
+            x_robots_tag_directives=(),
+            og_title=None,
+            og_description=None,
+            og_type=None,
+            og_url=None,
         )
 
     # Parse HTML DOM with BeautifulSoup
@@ -335,6 +487,16 @@ def observe_page(page: FetchedPage) -> PageObservation:
                 num_tables=0,
                 num_headings=0,
             ),
+            content_type=page.content_type,
+            response_headers=dict(page.response_headers or {}),
+            robots_meta_raw=None,
+            robots_meta_directives=(),
+            x_robots_tag_raw=None,
+            x_robots_tag_directives=(),
+            og_title=None,
+            og_description=None,
+            og_type=None,
+            og_url=None,
         )
 
     # 1. Metadata: Title
@@ -377,7 +539,7 @@ def observe_page(page: FetchedPage) -> PageObservation:
     for a_tag in soup.find_all("a"):
         raw_href = a_tag.get("href")
         raw_href_str = raw_href.strip() if raw_href is not None else ""
-        resolved_href = _resolve_url(base_url, raw_href_str) if raw_href_str else ""
+        resolved_href = resolve_and_normalize(base_url, raw_href_str) if raw_href_str else ""
         anchor_text = _clean_text(a_tag.get_text())
         is_internal = _classify_is_internal(base_url, resolved_href) if resolved_href else None
 
@@ -486,6 +648,13 @@ def observe_page(page: FetchedPage) -> PageObservation:
         num_headings=len(h1) + len(h2) + len(h3),
     )
 
+    # 11. Robots / indexability metadata (P1-T3)
+    robots_meta_raw, robots_meta_directives = _extract_robots_meta(soup)
+    x_robots_tag_raw, x_robots_tag_directives = _extract_x_robots_tag(page.response_headers or {})
+
+    # 12. Open Graph metadata (P1-T3)
+    og = _extract_open_graph(soup, base_url)
+
     return PageObservation(
         requested_url=page.requested_url,
         final_url=base_url,
@@ -504,6 +673,16 @@ def observe_page(page: FetchedPage) -> PageObservation:
         tables=tables,
         json_ld=json_ld_list,
         signals=signals,
+        content_type=page.content_type,
+        response_headers=dict(page.response_headers or {}),
+        robots_meta_raw=robots_meta_raw,
+        robots_meta_directives=robots_meta_directives,
+        x_robots_tag_raw=x_robots_tag_raw,
+        x_robots_tag_directives=x_robots_tag_directives,
+        og_title=og.get("og:title"),
+        og_description=og.get("og:description"),
+        og_type=og.get("og:type"),
+        og_url=og.get("og:url"),
     )
 
 
