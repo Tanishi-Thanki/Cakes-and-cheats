@@ -13,7 +13,18 @@ from src.audits.evidence_consistency import (
 from src.audits.finding_aggregator import aggregate_findings, deduplicate_findings, sort_findings, tag_findings
 from src.audits.freshness_corroboration import audit_freshness_corroboration
 from src.audits.engagement import audit_engagement
+from src.audits.external_evidence import (
+    BudgetTracker,
+    ExternalEvidence,
+    ExternalEvidenceBudget,
+    ExternalEvidenceClient,
+    ExternalEvidenceProvider,
+    ExternalFact,
+    external_fact_to_evidence_unit,
+)
 from src.audits.fact_inventory import (
+    AggregatedFact,
+    SiteEvidenceInventory,
     extract_fact_inventory,
 )
 from src.audits.machine_answerability import audit_machine_answerability
@@ -28,8 +39,22 @@ __all__ = [
     "AuditReport",
     "AuditRequest",
     "ConsistencyClassification",
+    # External evidence abstraction (Task 4)
+    "BudgetTracker",
+    "ExternalEvidence",
+    "ExternalEvidenceBudget",
+    "ExternalEvidenceClient",
+    "ExternalEvidenceProvider",
+    "ExternalFact",
+    "external_fact_to_evidence_unit",
+    # Fact inventory (Tasks 1-2)
+    "AggregatedFact",
     "EvidenceUnit",
     "FactInventory",
+    "SiteEvidenceInventory",
+    "audit_evidence_consistency",
+    "extract_fact_inventory",
+    # Orchestration
     "Finding",
     "ObjectiveMapping",
     "PriorityEngine",
@@ -48,7 +73,6 @@ __all__ = [
     "collect_signals",
     "compute_priorities",
     "deduplicate_findings",
-    "extract_fact_inventory",
     "map_findings_to_objectives",
     "report_to_json",
     "sort_findings",
