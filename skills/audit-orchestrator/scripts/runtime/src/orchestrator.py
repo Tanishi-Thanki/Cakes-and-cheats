@@ -87,12 +87,12 @@ def _ensure_optional_audits_registered() -> None:
         AUDIT_REGISTRY["evidence_consistency"] = lambda obs: audit_evidence_consistency(obs)
         AUDIT_REGISTRY["freshness_corroboration"] = lambda obs: audit_freshness_corroboration(obs)
         AUDIT_REGISTRY["t4_indexability"] = lambda obs: audit_t4_indexability(obs)
+        _optional_audits_registered = True
     except ImportError:
         logger.debug(
             "Optional audits (crawl_render, engagement, evidence_consistency, "
             "freshness_corroboration) not available."
         )
-    _optional_audits_registered = True
 
 
 # Deterministic default execution order — all six specialist audits run by default.

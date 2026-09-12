@@ -27,6 +27,7 @@ def _make_obs(url: str, text: str) -> PageObservation:
 class TestP3Integration(unittest.TestCase):
     """P3-A1 regression test ensuring the orchestrator passes complete observations to P2."""
 
+    @patch("src.orchestrator._optional_audits_registered", False)
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
     @patch("src.orchestrator.AUDIT_REGISTRY", new_callable=dict)
