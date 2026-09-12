@@ -201,158 +201,16 @@ def _check_low_text_representation(obs: PageObservation) -> Optional[Finding]:
     )
 
 
+from src.audits.fact_inventory import audit_evidence_consistency
+
+
 def _check_representation_conflict(obs: PageObservation) -> list[Finding]:
     """Check 3: Structured data representation conflict.
 
     Compares high-confidence fields between JSON-LD and visible text (pricing, availability).
-    Fires only when an explicit, demonstrable conflict is present.
+    Delegates consistency classification to FactInventory (fact_inventory.py).
     """
-    findings: list[Finding] = []
-    entities = _collect_json_ld_entities(obs)
-    if not entities:
-        return findings
-
-    visible_prices = _extract_visible_prices(obs.visible_text)
-    visible_numeric_set = {num for _, num in visible_prices}
-
-    # 1. Price comparison
-    for entity in entities:
-        candidates: list[dict[str, Any]] = []
-        offers = entity.get("offers")
-        if isinstance(offers, dict):
-            candidates.append(offers)
-        elif isinstance(offers, list):
-            candidates.extend(o for o in offers if isinstance(o, dict))
-        if "price" in entity:
-            candidates.append(entity)
-
-        for c in candidates:
-            raw_price = c.get("price")
-            if raw_price is None:
-                continue
-
-            num_str = re.sub(r"[^\d.]", "", str(raw_price))
-            json_integer = num_str.split(".")[0]
-            if not json_integer:
-                continue
-
-            # Only report conflict if visible prices exist and NONE match the JSON-LD price
-            if visible_numeric_set and json_integer not in visible_numeric_set:
-                raw_visible_strs = [raw for raw, _ in visible_prices]
-                currency = str(c.get("priceCurrency") or "").strip()
-                evidence = (
-                    f"Structured JSON-LD data specifies price '{raw_price}' "
-                    f"({currency or 'unspecified currency'}), whereas visible page text "
-                    f"explicitly shows conflicting price(s): {', '.join(raw_visible_strs)}. "
-                    "Inconsistent representations increase the risk of an automated system "
-                    "extracting conflicting or outdated pricing information."
-                )
-                findings.append(
-                    Finding(
-                        id="MA-REP-001",
-                        title="Conflicting page representations may reduce machine confidence",
-                        severity="high",
-                        evidence=evidence,
-                        suggested_action=SuggestedAction(
-                            summary=(
-                                "Reconcile pricing values between structured data (JSON-LD) "
-                                "and visible page text so automated systems receive consistent information."
-                            ),
-                            priority=1,
-                        ),
-                        priority=1,
-                        confidence="high",
-                        details={
-                            "json_ld_price": raw_price,
-                            "json_ld_currency": currency,
-                            "visible_prices": raw_visible_strs,
-                        },
-                    )
-                )
-                # One price conflict finding is sufficient
-                break
-        if findings:
-            break
-
-    # 2. Availability comparison
-    for entity in entities:
-        offers = entity.get("offers")
-        candidates = []
-        if isinstance(offers, dict):
-            candidates.append(offers)
-        elif isinstance(offers, list):
-            candidates.extend(o for o in offers if isinstance(o, dict))
-
-        for c in candidates:
-            raw_avail = str(c.get("availability") or "").lower()
-            if not raw_avail:
-                continue
-
-            is_json_instock = "instock" in raw_avail and "outofstock" not in raw_avail
-            is_json_outofstock = "outofstock" in raw_avail
-
-            has_visible_outofstock = bool(
-                re.search(r"\b(out of stock|sold out|unavailable)\b", obs.visible_text, re.IGNORECASE)
-            )
-            has_visible_instock = bool(
-                re.search(r"\b(in stock|available now)\b", obs.visible_text, re.IGNORECASE)
-            )
-
-            if is_json_instock and has_visible_outofstock and not has_visible_instock:
-                evidence = (
-                    "Structured data (JSON-LD) declares availability as 'InStock', but visible "
-                    "page text explicitly states 'Out of Stock'. Inconsistent representations "
-                    "increase the risk of automated systems providing conflicting stock status."
-                )
-                findings.append(
-                    Finding(
-                        id="MA-REP-002",
-                        title="Conflicting availability representations may reduce machine confidence",
-                        severity="high",
-                        evidence=evidence,
-                        suggested_action=SuggestedAction(
-                            summary=(
-                                "Synchronize stock status between structured data and visible text."
-                            ),
-                            priority=1,
-                        ),
-                        priority=1,
-                        confidence="high",
-                        details={
-                            "json_ld_availability": c.get("availability"),
-                            "visible_status": "Out of Stock",
-                        },
-                    )
-                )
-                break
-            elif is_json_outofstock and has_visible_instock and not has_visible_outofstock:
-                evidence = (
-                    "Structured data (JSON-LD) declares availability as 'OutOfStock', but visible "
-                    "page text states 'In Stock'. Inconsistent representations may mislead automated agents."
-                )
-                findings.append(
-                    Finding(
-                        id="MA-REP-002",
-                        title="Conflicting availability representations may reduce machine confidence",
-                        severity="high",
-                        evidence=evidence,
-                        suggested_action=SuggestedAction(
-                            summary=(
-                                "Synchronize stock status between structured data and visible text."
-                            ),
-                            priority=1,
-                        ),
-                        priority=1,
-                        confidence="high",
-                        details={
-                            "json_ld_availability": c.get("availability"),
-                            "visible_status": "In Stock",
-                        },
-                    )
-                )
-                break
-
-    return findings
+    return audit_evidence_consistency(obs)
 
 
 def _check_missing_structured_context(obs: PageObservation) -> Optional[Finding]:
