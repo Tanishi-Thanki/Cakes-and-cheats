@@ -242,23 +242,7 @@ def _canonical_findings(obs: PageObservation) -> List[Finding]:
     canonical_semantic = _semantic_url(canonical)
     final_semantic = _semantic_url(final)
 
-    if canonical_semantic == final_semantic:
-        findings.append(
-            Finding(
-                id="T4-021",
-                title="Canonical points to itself",
-                severity="low",
-                evidence=f"Canonical URL matches final URL (ignoring fragment): {canonical}",
-                suggested_action=SuggestedAction(
-                    summary="No action required; canonical correctly references the page itself.",
-                    priority=3,
-                ),
-                priority=3,
-                confidence="high",
-                classification="observation",
-            )
-        )
-    else:
+    if canonical_semantic != final_semantic:
         try:
             can_host = urlparse(canonical).hostname or ""
             fin_host = urlparse(final).hostname or ""
