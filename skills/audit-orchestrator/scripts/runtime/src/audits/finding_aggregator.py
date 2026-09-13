@@ -20,6 +20,7 @@ is identical up to whitespace formatting.
 
 from __future__ import annotations
 
+from src.audits.finding_ids import disambiguate_finding_ids
 from src.audits.models import SEVERITY_ORDER, Finding
 
 
@@ -131,16 +132,24 @@ def sort_findings(findings: list[Finding]) -> list[Finding]:
 def aggregate_findings(
     all_findings: list[Finding],
 ) -> list[Finding]:
-    """Aggregate findings from multiple audits: deduplicate and sort.
+    """Aggregate findings from multiple audits: deduplicate, harden IDs, sort.
 
     This is the main entry point for the aggregation layer.
+
+    Deduplication is conservative (existing behaviour): findings collapse only
+    when rule id and canonical evidence match. After deduplication, finding IDs
+    are hardened by :func:`disambiguate_finding_ids` so that the same base rule
+    ID never repeats within one report (P3-4). Single-instance rule IDs pass
+    through unchanged; colliding instances receive a deterministic suffix
+    derived from their own semantic evidence.
 
     Args:
         all_findings: Combined, unprocessed findings from all audits.
             Findings should already carry source_audit tags.
 
     Returns:
-        Deduplicated, sorted list of findings.
+        Deduplicated, ID-disambiguated, sorted list of findings.
     """
     deduped = deduplicate_findings(all_findings)
-    return sort_findings(deduped)
+    hardened = disambiguate_finding_ids(deduped)
+    return sort_findings(hardened)

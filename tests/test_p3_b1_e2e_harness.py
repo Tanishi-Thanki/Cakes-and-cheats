@@ -1069,8 +1069,12 @@ class TestEntrypointOfflinePipeline(unittest.TestCase):
         # The six specialist audits are clean on a well-formed page; the only
         # findings come from the deterministic t4_indexability audit (always-on
         # informational low-severity signals in the default pipeline).
-        self.assertEqual(sorted(f.id for f in result.findings),
-                         ["T4-005", "T4-021", "T4-024", "T4-024", "T4-031", "T4-032"])
+        ids = sorted(f.id for f in result.findings)
+        # P3-4: the two internal-canonical findings share rule T4-024 but target
+        # different URLs, so each keeps a deterministic, unique instance ID.
+        self.assertEqual([i[:7] for i in ids],
+                         ["T4-005", "T4-021", "T4-024-", "T4-024-", "T4-031", "T4-032"])
+        self.assertEqual(len(ids), len(set(ids)), f"finding-ID collisions: {ids}")
         self.assertTrue(all(f.source_audit == "t4_indexability" for f in result.findings))
         self.assertTrue(all(f.severity == "low" for f in result.findings))
         final = report.as_final_dict()
