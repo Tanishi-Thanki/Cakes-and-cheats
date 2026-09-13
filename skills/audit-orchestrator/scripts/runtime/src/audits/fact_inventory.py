@@ -100,6 +100,45 @@ FUTURE_INDICATORS: re.Pattern[str] = re.compile(
     re.IGNORECASE,
 )
 
+# Billing / pricing unit context (e.g. "$10/month", "per user", "annually").
+PRICE_PERIOD_PATTERN: re.Pattern[str] = re.compile(
+    r"/\s*(month|mo|year|yr|day|week|user|seat|item|unit|gb|license)"
+    r"|\bper\s+(month|year|day|week|user|seat|item|unit|gb|license)\b"
+    r"|\b(monthly|annually|yearly|weekly|daily)\b",
+    re.IGNORECASE,
+)
+
+PERIOD_CANONICAL: dict[str, str] = {
+    "month": "month", "mo": "month", "monthly": "month",
+    "year": "year", "yr": "year", "annually": "year", "yearly": "year",
+    "day": "day", "daily": "day",
+    "week": "week", "weekly": "week",
+    "user": "user", "seat": "seat", "item": "item", "unit": "unit",
+    "gb": "gb", "license": "license",
+}
+
+
+def detect_billing_period(text_snippet: str) -> Optional[str]:
+    """Return a normalized billing/unit context from a price snippet, else None."""
+    if not text_snippet:
+        return None
+    m = PRICE_PERIOD_PATTERN.search(text_snippet)
+    if not m:
+        return None
+    raw_key = next((g for g in m.groups() if g), "").lower().strip()
+    return PERIOD_CANONICAL.get(raw_key)
+
+
+def _price_qualifier(context: str) -> Optional[str]:
+    """Classify a price's promotional context from its preceding text window."""
+    if re.search(r"\b(from|starting at|starts at|begins at)\b", context, re.IGNORECASE):
+        return "from"
+    if re.search(r"\b(was|original|regular|mrp|rrp|before|list price|slashed)\b", context, re.IGNORECASE):
+        return "original"
+    if re.search(r"\b(sale|now|you pay|save|discount|deal|special|offer)\b", context, re.IGNORECASE):
+        return "sale"
+    return None
+
 
 @dataclass(frozen=True)
 class EvidenceUnit:
@@ -129,6 +168,8 @@ class EvidenceUnit:
     confidence: Literal["high", "medium", "low"] = "high"
     timestamp: Optional[str] = None
     is_range_or_prefix: bool = False
+    qualifier: Optional[str] = None
+    billing_period: Optional[str] = None
     details: dict[str, Any] = field(default_factory=dict)
     source_classification: Literal["FIRST_PARTY", "EXTERNAL"] = "FIRST_PARTY"
     temporal_qualifier: TemporalQualifier = "UNKNOWN"
@@ -418,6 +459,46 @@ class FactInventory:
             return "MATCH", f"All {len(curr_eval)} current sources agree on attribute '{attribute}'."
 
         if len(unique_values) > 1:
+            differing = [u for u in curr_eval if u.value is not None]
+
+            if attribute == "price":
+                # Promotional / "from" / "original" price variants are legitimate.
+                promo_qualifiers = {u.qualifier for u in differing if u.qualifier}
+                if promo_qualifiers.intersection({"sale", "original", "from"}):
+                    return "AMBIGUOUS", (
+                        f"Price variants for attribute '{attribute}' carry promotional or "
+                        "'from'/original context and are not contradictory."
+                    )
+
+                # Differing billing periods (monthly/annual/per-user) are not one price.
+                periods = {getattr(u, "billing_period", None) or "" for u in differing}
+                if len(periods) > 1:
+                    return "AMBIGUOUS", (
+                        f"Price values for attribute '{attribute}' belong to different "
+                        f"billing periods/units ({sorted(p for p in periods if p)} or unqualified) and cannot be compared."
+                    )
+
+                # Prices expressed in different currencies are not blindly comparable.
+                currencies = {
+                    u.value[0]
+                    for u in differing
+                    if isinstance(u.value, tuple) and len(u.value) >= 2 and u.value[0] is not None
+                }
+                if len(currencies) > 1:
+                    return "AMBIGUOUS", (
+                        f"Price values for attribute '{attribute}' are expressed in different "
+                        f"currencies ({sorted(currencies)}) and cannot be compared directly."
+                    )
+
+            # A single representation/context producing several values cannot be
+            # attributed to one entity value (e.g. a page listing many products).
+            provenance_pairs = {(u.source, u.source_type) for u in differing}
+            if len(provenance_pairs) < 2:
+                return "AMBIGUOUS", (
+                    f"Multiple values for attribute '{attribute}' originate from the same "
+                    "representation/context and cannot be attributed to a single entity value."
+                )
+
             return "CONFLICT", f"Conflicting values observed for attribute '{attribute}' in current timeframe: {unique_values}."
 
         return "AMBIGUOUS", f"Attribute '{attribute}' values could not be confidently compared."
@@ -575,7 +656,7 @@ class SiteEvidenceInventory:
             if len(group_units) == 0:
                 status: ConsistencyState | Literal["SINGLE_PAGE"] = "INSUFFICIENT_EVIDENCE"
             elif len(sources) == 1:
-                if eval_status in ("CONFLICT", "HISTORICAL", "EXPIRED", "FUTURE", "AMBIGUOUS"):
+                if eval_status in ("CONFLICT", "HISTORICAL", "EXPIRED", "FUTURE"):
                     status = eval_status
                 else:
                     status = "SINGLE_PAGE"
@@ -711,8 +792,44 @@ class SiteEvidenceInventory:
 # Extraction & Audit Logic
 # ---------------------------------------------------------------------------
 
+def _identity_compatible_with_primary(name: str, primary: str) -> bool:
+    """Whether a JSON-LD name plausibly resolves to the page's primary entity.
+
+    Conservative string/token heuristic: exact match, substring containment, or a
+    shared identity of at least two significant tokens qualify as the same entity.
+    Generic single-token overlaps (e.g. two different "Product A"/"Product B")
+    never merge, so cross-entity evidence is never compared as one fact.
+    """
+    if not name or not primary:
+        return False
+    n = re.sub(r"\s+", " ", str(name).strip().lower())
+    p = re.sub(r"\s+", " ", str(primary).strip().lower())
+    if n == p:
+        return True
+    if n in p or p in n:
+        return True
+    tok = lambda t: {w for w in re.findall(r"\b[a-z0-9]+\b", t) if len(w) >= 4}
+    return len(tok(n) & tok(p)) >= 2
+
+
+CONTAINER_JSON_LD_TYPES: frozenset[str] = frozenset({
+    "offer",
+    "aggregateoffer",
+    "pricespecification",
+    "monetaryamount",
+    "offercatalog",
+    "aggregaterating",
+    "offershippingdetails",
+})
+
+
 def _collect_json_ld_dicts(obs: PageObservation) -> list[dict[str, Any]]:
-    """Traverse all valid JSON-LD blocks to gather top-level and nested entity dictionaries."""
+    """Traverse all valid JSON-LD blocks to gather entity dictionaries.
+
+    Container dicts (Offer, priceSpecification, ...) that carry pricing metadata
+    but no identity are skipped so their fields are never attributed to a
+    fallback page-level entity label.
+    """
     entities: list[dict[str, Any]] = []
 
     def _traverse(item: Any) -> None:
@@ -720,6 +837,18 @@ def _collect_json_ld_dicts(obs: PageObservation) -> list[dict[str, Any]]:
             if "@graph" in item and isinstance(item["@graph"], list):
                 for sub in item["@graph"]:
                     _traverse(sub)
+            raw_type = str(item.get("@type") or "").lower()
+            if raw_type in CONTAINER_JSON_LD_TYPES:
+                for v in item.values():
+                    if isinstance(v, (dict, list)):
+                        _traverse(v)
+                return
+            if "name" not in item and ("price" in item or "offers" in item):
+                # Anonymous price/offer-bearing container without identity. Skip.
+                for v in item.values():
+                    if isinstance(v, (dict, list)):
+                        _traverse(v)
+                return
             entities.append(item)
             for v in item.values():
                 if isinstance(v, (dict, list)):
@@ -766,9 +895,13 @@ def extract_fact_inventory(
             if not entity_name:
                 entity_name = "Page Entity"
 
-            # Clean common title/page suffixes (e.g. "Product X Review" -> "Product X")
+            # Clean common title/page suffixes (e.g. "Product X Review" -> "Product X").
+            # A trailing generic word is only stripped when enough identity remains;
+            # never reduce a real page name to a fragment ("Our Store" stays intact).
             entity_name = re.sub(r"\s+-\s+.*$", "", entity_name)
-            entity_name = re.sub(r"\s+(Review|News|Deals|Overview|Guide|Page|Store|Official Site)\b", "", entity_name, flags=re.IGNORECASE).strip()
+            stripped = re.sub(r"\s+(Review|News|Deals|Overview|Guide|Page|Store|Official Site)\b", "", entity_name, flags=re.IGNORECASE).strip()
+            if stripped and (len(stripped.split()) >= 2 or len(stripped) >= 8):
+                entity_name = stripped
             if not entity_name:
                 entity_name = "Page Entity"
 
@@ -791,6 +924,11 @@ def extract_fact_inventory(
                         continue
                     raw_j_name = str(j_entity.get("name") or entity_name).strip()
                     j_name = re.sub(r"\s+(Review|News|Deals|Overview|Guide|Page|Store|Official Site)\b", "", raw_j_name, flags=re.IGNORECASE).strip() or entity_name
+                    if _identity_compatible_with_primary(j_name, entity_name):
+                        # A naming variant of the page's primary entity: attribute
+                        # its evidence to the primary label so genuine same-entity
+                        # conflicts stay detectable.
+                        j_name = entity_name
 
                     # JSON-LD Price
                     candidates = []
@@ -820,6 +958,7 @@ def extract_fact_inventory(
                                         confidence="high",
                                         timestamp=extracted_year,
                                         is_range_or_prefix=is_prefix,
+                                        billing_period=detect_billing_period(str(raw_price)),
                                         details={"currency": curr, "amount": amt},
                                         source_classification="FIRST_PARTY",
                                         temporal_qualifier=price_qual,
@@ -894,11 +1033,14 @@ def extract_fact_inventory(
                     raw_str = m.group(0).strip()
                     curr, amt, is_prefix = normalize_price(raw_str)
                     if amt is not None:
-                        # Extract surrounding snippet to detect temporal context
-                        start_idx = max(0, m.start() - 30)
-                        end_idx = min(len(vis_text), m.end() + 30)
+                        # Extract surrounding snippet to detect temporal context,
+                        # billing period, and promotional qualifier.
+                        start_idx = max(0, m.start() - 40)
+                        end_idx = min(len(vis_text), m.end() + 40)
                         snippet = vis_text[start_idx:end_idx]
                         vis_qual, snippet_year = _detect_temporal_qualifier(snippet, extracted_year)
+                        period = detect_billing_period(snippet)
+                        qualifier = _price_qualifier(vis_text[max(0, m.start() - 40):m.start()])
 
                         inventory.add_unit(
                             EvidenceUnit(
@@ -911,6 +1053,8 @@ def extract_fact_inventory(
                                 confidence="high",
                                 timestamp=snippet_year or extracted_year,
                                 is_range_or_prefix=is_prefix,
+                                qualifier=qualifier,
+                                billing_period=period,
                                 details={"currency": curr, "amount": amt},
                                 source_classification="FIRST_PARTY",
                                 temporal_qualifier=vis_qual,

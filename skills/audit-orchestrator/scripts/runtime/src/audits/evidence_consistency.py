@@ -110,6 +110,7 @@ class EvidenceUnit:
     raw_value: Optional[Any] = None
     date: Optional[str] = None
     qualifier: Optional[str] = None
+    period: Optional[str] = None
 
 
 # Deterministic confidence tier per source type (conservative).
@@ -234,6 +235,53 @@ AVAILABILITY_CANONICAL: dict[str, str] = {
     "backorder": "BackOrder",
     "limitedavailability": "LimitedStock",
 }
+
+# Billing / pricing unit context (e.g. "$10/month", "per user", "annually").
+PRICE_PERIOD_PATTERN: re.Pattern[str] = re.compile(
+    r"/\s*(month|mo|year|yr|day|week|user|seat|item|unit|gb|license)"
+    r"|\bper\s+(month|year|day|week|user|seat|item|unit|gb|license)\b"
+    r"|\b(monthly|annually|yearly|weekly|daily)\b",
+    re.IGNORECASE,
+)
+
+PERIOD_CANONICAL: dict[str, str] = {
+    "month": "month", "mo": "month", "monthly": "month",
+    "year": "year", "yr": "year", "annually": "year", "yearly": "year",
+    "day": "day", "daily": "day",
+    "week": "week", "weekly": "week",
+    "user": "user", "seat": "seat", "item": "item", "unit": "unit",
+    "gb": "gb", "license": "license",
+}
+
+
+def detect_billing_period(text_snippet: str) -> Optional[str]:
+    """Normalize a billing/unit context ("/month", "per user", "annually") or None."""
+    if not text_snippet:
+        return None
+    m = PRICE_PERIOD_PATTERN.search(text_snippet)
+    if not m:
+        return None
+    raw_key = next((g for g in m.groups() if g), "").lower().strip()
+    return PERIOD_CANONICAL.get(raw_key)
+
+
+def _identity_compatible_with_primary(name: str, primary: str) -> bool:
+    """Whether a JSON-LD name plausibly resolves to the page's primary entity.
+
+    Conservative string/token heuristic: exact match, substring containment, or a
+    shared identity of at least two significant tokens qualify as the same entity.
+    Generic single-token overlaps (e.g. two different "Product A"/"Product B")
+    never merge, so cross-entity evidence is never compared as one fact.
+    """
+    if not name or not primary:
+        return False
+    n = re.sub(r"\s+", " ", str(name).strip().lower())
+    p = re.sub(r"\s+", " ", str(primary).strip().lower())
+    if n == p:
+        return True
+    if n in p or p in n:
+        return True
+    return len(_significant_tokens(n) & _significant_tokens(p)) >= 2
 
 # Date fields considered authoritative temporal evidence (aligns with the audits).
 DATE_FIELDS: tuple[str, ...] = ("datePublished", "dateModified", "uploadDate", "priceValidUntil")
@@ -482,7 +530,7 @@ def normalize_value(attribute: str, value: Any, *, qualifier: Optional[str] = No
 
 
 def _iter_json_ld_entities(obs: PageObservation) -> Iterator[dict[str, Any]]:
-    """Yield every top-level + nested JSON-LD dictionary (like the audits)."""
+    """Yield every top-level + nested JSON-LD entity dict (containers excluded)."""
     for block in obs.json_ld:
         if not block.is_valid or block.parsed_data is None:
             continue
@@ -492,6 +540,18 @@ def _iter_json_ld_entities(obs: PageObservation) -> Iterator[dict[str, Any]]:
             if isinstance(item, dict):
                 if "@graph" in item and isinstance(item["@graph"], list):
                     stack.extend(item["@graph"])
+                raw_type = str(item.get("@type") or "").lower()
+                if raw_type in CONTAINER_JSON_LD_TYPES:
+                    for val in item.values():
+                        if isinstance(val, (dict, list)):
+                            stack.append(val)
+                    continue
+                if "name" not in item and ("price" in item or "offers" in item):
+                    # Anonymous price/offer-bearing container without identity.
+                    for val in item.values():
+                        if isinstance(val, (dict, list)):
+                            stack.append(val)
+                    continue
                 yield item
                 for val in item.values():
                     if isinstance(val, (dict, list)):
@@ -513,6 +573,19 @@ PRIMARY_ENTITY_TYPES: frozenset[str] = frozenset({
     "article",
     "newsarticle",
     "brand",
+})
+
+# JSON-LD container types whose dicts carry pricing/rating metadata but are NOT
+# themselves entities with identity. Skipping them prevents phantom attribution
+# of their fields (e.g. an Offer's price) to a fallback page-level label.
+CONTAINER_JSON_LD_TYPES: frozenset[str] = frozenset({
+    "offer",
+    "aggregateoffer",
+    "pricespecification",
+    "monetaryamount",
+    "offercatalog",
+    "aggregaterating",
+    "offershippingdetails",
 })
 
 # Entity types whose `name` constitutes primary-entity name evidence. Explicitly
@@ -637,6 +710,7 @@ def _extract_offer_price_units(
             raw_value=str(price),
             date=str(pvalid) if isinstance(pvalid, str) and pvalid.strip() else None,
             qualifier=qualifier,
+            period=detect_billing_period(str(price)),
         )
     )
     return units
@@ -680,7 +754,9 @@ def _extract_visible_price_units(obs: PageObservation) -> list[EvidenceUnit]:
     prev_end = 0
     for start, end, is_suffix in scalar_spans:
         raw = re.sub(r"\s+", " ", keep[start:end]).strip()
-        qualifier = _price_qualifier(keep[prev_end:start][-40:].lower())
+        context_start = max(0, start - 40)
+        qualifier = _price_qualifier(keep[context_start:start].lower())
+        period = detect_billing_period(keep[max(0, start - 40): min(len(keep), end + 40)])
         units.append(
             EvidenceUnit(
                 entity="",
@@ -691,6 +767,7 @@ def _extract_visible_price_units(obs: PageObservation) -> list[EvidenceUnit]:
                 confidence=SOURCE_CONFIDENCE["visible_text"],
                 raw_value=raw,
                 qualifier=qualifier,
+                period=period,
             )
         )
         prev_end = end
@@ -972,13 +1049,14 @@ def build_fact_inventory(
             )
 
     # Prices (visible + JSON-LD), availability, dates, and attributes.
-    def _assign(unit: EvidenceUnit) -> None:
+    def _assign(unit: EvidenceUnit, *, entity: Optional[str] = None) -> None:
         """Re-tag a page-agnostic unit with the resolved primary entity."""
-        if not primary:
+        target = entity or primary
+        if not target:
             return
         inventory.add_unit(
             EvidenceUnit(
-                entity=primary,
+                entity=target,
                 attribute=unit.attribute,
                 value=unit.value,
                 source=unit.source,
@@ -987,23 +1065,42 @@ def build_fact_inventory(
                 raw_value=unit.raw_value,
                 date=unit.date,
                 qualifier=unit.qualifier,
+                period=unit.period,
             )
         )
 
+    # The page's *visible* identity (h1/title) scope for visible-text evidence.
+    # It collapses onto the JSON-LD primary only when they are naming variants of
+    # the same entity; otherwise a visible price belongs to the visible identity,
+    # never to a structured entity it does not mention.
+    visible_identity = ""
+    if obs.h1 and obs.h1[0].strip():
+        visible_identity = obs.h1[0].strip()
+    elif obs.title and obs.title.strip():
+        visible_identity = obs.title.strip()
+    if _identity_compatible_with_primary(visible_identity, primary):
+        visible_identity = primary
+
     for unit in _extract_visible_price_units(obs):
-        _assign(unit)
+        _assign(unit, entity=visible_identity)
 
     currency_ctx: Optional[str] = None
     seen_offers: set[int] = set()
     for entity_dict in _iter_json_ld_entities(obs):
         currency_ctx = str(entity_dict.get("priceCurrency") or currency_ctx or "").strip() or None
-        name = str(entity_dict.get("name") or "")
+        name = str(entity_dict.get("name") or "").strip()
         for offer in _offer_candidates(entity_dict):
             if id(offer) in seen_offers:
                 continue
             seen_offers.add(id(offer))
             for unit in _extract_offer_price_units(offer, name, currency_ctx, source):
-                _assign(unit)
+                if name and not _identity_compatible_with_primary(name, primary):
+                    # Evidence from a different entity on the same page keeps its
+                    # own identity label; it must not be attributed to the primary
+                    # entity (prevents cross-entity price comparisons).
+                    inventory.add_unit(unit)
+                else:
+                    _assign(unit)
 
     for unit in _extract_availability_units(obs):
         _assign(unit)
@@ -1042,25 +1139,38 @@ def _year_of(unit: EvidenceUnit) -> Optional[int]:
 
 
 def _identity_classification(units: Sequence[EvidenceUnit]) -> ConsistencyClassification:
-    """Token-overlap based classification for name/brand/entity attributes."""
+    """Token-overlap based classification for name/brand/entity attributes.
+
+    MATCH requires substantial shared identity vocabulary (>=2 significant
+    tokens) or full containment where the contained claim is itself meaningful
+    (>=2 tokens).  A single generic token (e.g. an "Acme" heading next to
+    "Acme Logistics Corp" / "Zeta Financial Services") can neither confirm nor
+    refute an entity, so it can never mask a genuine structured disagreement.
+    """
     texts = [str(u.value) for u in units]
     token_sets = [_significant_tokens(t) for t in texts]
-    full_sets = token_sets
+    clean_texts = [re.sub(r"\s+", " ", t.strip().lower()) for t in texts]
 
     for i in range(len(units)):
         for j in range(i + 1, len(units)):
-            if full_sets[i] and full_sets[i] & full_sets[j]:
+            if len(token_sets[i] & token_sets[j]) >= 2:
                 return "MATCH"
-    clean_texts = [re.sub(r"\s+", " ", t.strip().lower()) for t in texts]
-    for i in range(len(units)):
-        for j in range(i + 1, len(units)):
             a, b = clean_texts[i], clean_texts[j]
             if a and b and (a in b or b in a):
-                return "MATCH"
+                if min(len(token_sets[i]), len(token_sets[j])) >= 2:
+                    return "MATCH"
 
-    meaningful = [len(s) for s in full_sets]
-    if all(n >= 2 for n in meaningful):
-        return "CONFLICT"
+    # Only claims carrying a real identity vocabulary (>=2 significant tokens)
+    # participate in a conflict decision.  Weak/single-token claims alone are
+    # never worth a finding, and a weak claim must not veto a genuine
+    # disagreement between two structured entities.
+    strong_units = [u for u, s in zip(units, token_sets) if len(s) >= 2]
+    if len(strong_units) >= 2:
+        if any(u.source_type == "json_ld" for u in strong_units):
+            return "CONFLICT"
+        # A disagreement among weak/non-authoritative claims only (e.g. metadata
+        # <title> vs marketing heading) is not a resolvable identity conflict.
+        return "AMBIGUOUS"
     return "AMBIGUOUS"
 
 
@@ -1199,6 +1309,19 @@ def classify_consistency(
                 units=tuple(filtered),
                 normalized_values=tuple(nv for _, nv in normalized),
                 reason="price currency context missing",
+            )
+
+        # Different billing periods/units (monthly vs annual, per-user vs flat)
+        # are never the same price claim.
+        periods = {getattr(u, "period", None) or "" for u, _ in normalized}
+        if len(periods) > 1:
+            return ConsistencyResult(
+                entity=result_entity,
+                attribute=result_attr,
+                classification="AMBIGUOUS",
+                units=tuple(filtered),
+                normalized_values=tuple(nv for _, nv in normalized),
+                reason="different billing periods/units cannot be compared",
             )
 
     # Temporal reasoning (cross-page, explicitly dated evidence only).
