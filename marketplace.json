@@ -31,6 +31,10 @@
     {
       "id": "task-readiness-audit",
       "path": "skills/task-readiness-audit"
+    },
+    {
+      "id": "t4-indexability",
+      "path": "skills/t4-indexability"
     }
   ]
 }
