@@ -4,7 +4,7 @@ Validates the complete P1 stack against two deterministic in-memory fixture
 sites (a realistic bakery site and a hostile/edge-case site), plus:
 - the bounded crawl -> SiteAuditContext chain (steps 4-5);
 - determinism of structural output across repeat runs (step 6);
-- six-audit compatibility against crawled PageObservation objects (step 7);
+- default audit-set compatibility against crawled PageObservation objects (step 7);
 - the full run_audit_full entrypoint smoke test (step 8);
 - observed runtime for representative fixtures (step 9);
 - regression tests for the two crawl-boundary exception guards added by T7.
@@ -35,6 +35,7 @@ from src.audits.engagement import audit_engagement
 from src.audits.evidence_consistency import audit_evidence_consistency
 from src.audits.freshness_corroboration import audit_freshness_corroboration
 from src.audits.machine_answerability import audit_machine_answerability
+from src.audits.t4_indexability import audit_t4_indexability
 from src.audits.task_readiness import audit_task_readiness
 from src.crawler.crawler import FetchedPage
 from src.crawler.crawl_session import CrawlConfig, crawl_site
@@ -504,17 +505,17 @@ class TestDeterminism(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Six-audit compatibility (step 7)
+# Default audit-set compatibility (step 7)
 # ---------------------------------------------------------------------------
 
 
-class TestSixAuditCompatibility(unittest.TestCase):
+class TestDefaultAuditSetCompatibility(unittest.TestCase):
     def _observations(self):
         result, _ = crawl(build_realistic_site(), max_pages=50, max_depth=3)
         ctx = build_site_audit_context(result)
         return ctx
 
-    def test_all_six_audits_run_on_crawled_observations(self) -> None:
+    def test_all_default_audits_run_on_crawled_observations(self) -> None:
         ctx = self._observations()
         audits = {
             "machine_answerability": audit_machine_answerability,
@@ -523,6 +524,7 @@ class TestSixAuditCompatibility(unittest.TestCase):
             "engagement": audit_engagement,
             "evidence_consistency": audit_evidence_consistency,
             "freshness_corroboration": audit_freshness_corroboration,
+            "t4_indexability": audit_t4_indexability,
         }
         for url in (f"{SCOPE}/", f"{SCOPE}/products/product-a", f"{SCOPE}/contact"):
             obs = ctx.observations[url]
@@ -578,7 +580,7 @@ class TestEntrypointSmoke(unittest.TestCase):
         self.assertTrue(result.is_success)
         self.assertEqual(result.audit_errors, {})
         self.assertEqual(list(result.options.audits), list(_DEFAULT_AUDITS))
-        self.assertEqual(len(result.options.audits), 6)
+        self.assertEqual(len(result.options.audits), len(_DEFAULT_AUDITS))
 
         final = report.as_final_dict()
         for key in ("site", "audited_at", "summary", "findings", "audits_run"):

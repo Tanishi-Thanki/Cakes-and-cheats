@@ -1066,10 +1066,16 @@ class TestEntrypointOfflinePipeline(unittest.TestCase):
         result, report = run_audit_full(f"{HST}/")
         self.assertTrue(result.is_success)
         self.assertEqual(result.audit_errors, {})
-        self.assertEqual(result.findings, [])
+        # The six specialist audits are clean on a well-formed page; the only
+        # findings come from the deterministic t4_indexability audit (always-on
+        # informational low-severity signals in the default pipeline).
+        self.assertEqual(sorted(f.id for f in result.findings),
+                         ["T4-005", "T4-021", "T4-024", "T4-024", "T4-031", "T4-032"])
+        self.assertTrue(all(f.source_audit == "t4_indexability" for f in result.findings))
+        self.assertTrue(all(f.severity == "low" for f in result.findings))
         final = report.as_final_dict()
-        self.assertEqual(final["summary"], {"total_findings": 0, "high": 0, "medium": 0, "low": 0})
-        self.assertEqual(final["findings"], [])
+        self.assertEqual(final["summary"], {"total_findings": 6, "high": 0, "medium": 0, "low": 6})
+        self.assertEqual(len(final["findings"]), 6)
         self.assertEqual(final["audits_run"], list(_DEFAULT_AUDITS))
 
     @patch("src.crawler.crawler.requests.get")
@@ -1079,11 +1085,13 @@ class TestEntrypointOfflinePipeline(unittest.TestCase):
         self.assertTrue(result.is_success)
         self.assertEqual(result.audit_errors, {})
         ids = [f.id for f in result.findings]
-        self.assertEqual(sorted(ids), ["ENG-004", "TR-INT-001", "TR-PROC-001"])
+        self.assertEqual(sorted(ids), ["ENG-004", "T4-005", "T4-020", "T4-030", "TR-INT-001", "TR-PROC-001"])
         self.assertEqual(sum(1 for f in result.findings if f.severity == "critical"), 1)
+        t4_ids = [f.id for f in result.findings if f.source_audit == "t4_indexability"]
+        self.assertEqual(sorted(t4_ids), ["T4-005", "T4-020", "T4-030"])
 
         final = report.as_final_dict()
-        self.assertEqual(final["summary"], {"total_findings": 3, "high": 0, "medium": 2, "low": 0, "critical": 1})
+        self.assertEqual(final["summary"], {"total_findings": 6, "high": 0, "medium": 2, "low": 3, "critical": 1})
         self.assertEqual(len(final["findings"]), final["summary"]["total_findings"])
         for finding in final["findings"]:
             self.assertTrue(finding["evidence"])

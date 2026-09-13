@@ -1,16 +1,16 @@
-"""Tests for the unified six-audit pipeline via run_audit() and run_audit_full().
+"""Tests for the unified default-audit pipeline via run_audit() and run_audit_full().
 
 Architecture:
-    run_audit()      → fetch once → observe once → all six specialist audits → aggregate
+    run_audit()      → fetch once → observe once → all specialist audits → aggregate
     run_audit_full() → run_audit() → objective mapping → priority engine → final report
 
-Verifies:
-1. run_audit() defaults to all six specialist audits.
-2. run_audit_full() also defaults to all six specialist audits.
-3. All six specialist audits receive the same PageObservation instance (single fetch+observe).
+Verifies (_DEFAULT_AUDITS currently contains seven specialist audits):
+1. run_audit() defaults to all specialist audits (incl. t4_indexability).
+2. run_audit_full() also defaults to all specialist audits.
+3. All specialist audits receive the same PageObservation instance (single fetch+observe).
 4. An individual audit failure is isolated and does not crash the pipeline.
-5. Findings from all six audits reach the unified report.
-6. Objective mapping and priority ordering function seamlessly after all six audits run.
+5. Findings from all specialist audits reach the unified report.
+6. Objective mapping and priority ordering function seamlessly after all specialist audits run.
 7. Explicit audit selection (AuditRequest.audits or AuditOptions.audits) is respected.
 8. Final report schema compliance and required finding fields.
 """
@@ -68,11 +68,11 @@ def _make_mock_crawl_result(is_success=True, error_message=None):
 
 
 # Convenience alias — _DEFAULT_AUDITS is the single canonical constant.
-_ALL_SIX = _DEFAULT_AUDITS
+_ALL_DEFAULT = _DEFAULT_AUDITS
 
 
-class TestUnifiedSixAuditPipeline(unittest.TestCase):
-    """Test suite for the unified six-audit default pipeline."""
+class TestUnifiedDefaultAuditPipeline(unittest.TestCase):
+    """Test suite for the unified default audit pipeline."""
 
     def _mock_crawled(
         self,
@@ -109,55 +109,55 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
 
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
-    def test_run_audit_defaults_to_all_six_audits(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+    def test_run_audit_defaults_to_all_default_audits(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
         mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
-        """1. run_audit() with no options defaults to all six specialist audits."""
+        """1. run_audit() with no options defaults to all seven specialist audits."""
         mock_crawl.return_value = self._mock_crawled()
 
         res_str = run_audit("https://example.com/")
         self.assertTrue(res_str.is_success)
-        self.assertEqual(list(res_str.options.audits), list(_ALL_SIX))
-        self.assertEqual(len(res_str.options.audits), 6)
+        self.assertEqual(list(res_str.options.audits), list(_ALL_DEFAULT))
+        self.assertEqual(len(res_str.options.audits), len(_ALL_DEFAULT))
 
         res_req = run_audit(AuditRequest("https://example.com/"))
         self.assertTrue(res_req.is_success)
-        self.assertEqual(list(res_req.options.audits), list(_ALL_SIX))
-        self.assertEqual(len(res_req.options.audits), 6)
+        self.assertEqual(list(res_req.options.audits), list(_ALL_DEFAULT))
+        self.assertEqual(len(res_req.options.audits), len(_ALL_DEFAULT))
 
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
-    def test_run_audit_full_defaults_to_all_six_audits(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+    def test_run_audit_full_defaults_to_all_default_audits(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
         mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
-        """2. run_audit_full() with no options also defaults to all six specialist audits."""
+        """2. run_audit_full() with no options also defaults to all seven specialist audits."""
         mock_crawl.return_value = self._mock_crawled()
 
         res_str, rep_str = run_audit_full("https://example.com/")
         self.assertTrue(res_str.is_success)
-        self.assertEqual(list(res_str.options.audits), list(_ALL_SIX))
-        self.assertEqual(rep_str.audits_run, list(_ALL_SIX))
-        self.assertEqual(len(rep_str.audits_run), 6)
+        self.assertEqual(list(res_str.options.audits), list(_ALL_DEFAULT))
+        self.assertEqual(rep_str.audits_run, list(_ALL_DEFAULT))
+        self.assertEqual(len(rep_str.audits_run), len(_ALL_DEFAULT))
 
         req = AuditRequest("https://example.com/")
         res_req, rep_req = run_audit_full(req)
         self.assertTrue(res_req.is_success)
-        self.assertEqual(list(res_req.options.audits), list(_ALL_SIX))
-        self.assertEqual(rep_req.audits_run, list(_ALL_SIX))
+        self.assertEqual(list(res_req.options.audits), list(_ALL_DEFAULT))
+        self.assertEqual(rep_req.audits_run, list(_ALL_DEFAULT))
 
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
-    def test_all_six_audits_receive_same_observation(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+    def test_all_default_audits_receive_same_observation(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
         mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
-        """3. All six specialist audits receive the identical PageObservation instance (single fetch)."""
+        """3. All seven specialist audits receive the identical PageObservation instance (single fetch)."""
         mock_crawl.return_value = self._mock_crawled()
 
         from src.orchestrator import AUDIT_REGISTRY, _ensure_optional_audits_registered
         _ensure_optional_audits_registered()
 
-        received_observations: dict[str, list[PageObservation]] = {name: [] for name in _ALL_SIX}
+        received_observations: dict[str, list[PageObservation]] = {name: [] for name in _ALL_DEFAULT}
 
         original_registry = dict(AUDIT_REGISTRY)
         try:
-            for name in _ALL_SIX:
+            for name in _ALL_DEFAULT:
                 orig_fn = original_registry[name]
 
                 def make_spy(n: str, fn):
@@ -171,20 +171,20 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             res, _ = run_audit_full("https://example.com/")
             self.assertTrue(res.is_success)
 
-            # Exactly one HTTP fetch for all six audits
+            # Exactly one HTTP fetch for all seven audits
             self.assertEqual(mock_crawl.call_count, 1)
 
             # Each audit invoked exactly once
-            for name in _ALL_SIX:
+            for name in _ALL_DEFAULT:
                 self.assertEqual(len(received_observations[name]), 1, f"Audit {name} was not called once")
 
             # All received the EXACT same PageObservation instance
-            first_obs = received_observations[_ALL_SIX[0]][0]
-            for name in _ALL_SIX[1:]:
+            first_obs = received_observations[_ALL_DEFAULT[0]][0]
+            for name in _ALL_DEFAULT[1:]:
                 self.assertIs(
                     received_observations[name][0],
                     first_obs,
-                    f"Audit {name} did not receive the same observation instance as {_ALL_SIX[0]}",
+                    f"Audit {name} did not receive the same observation instance as {_ALL_DEFAULT[0]}",
                 )
         finally:
             AUDIT_REGISTRY.clear()
@@ -211,8 +211,8 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             self.assertTrue(res.is_success)
             self.assertIn("crawl_render", res.audit_errors)
             self.assertIn("Boom in crawl_render", res.audit_errors["crawl_render"])
-            # All six audits were selected; the failure is recorded but does not propagate
-            self.assertEqual(len(res.options.audits), 6)
+            # All seven audits were selected; the failure is recorded but does not propagate
+            self.assertEqual(len(res.options.audits), len(_ALL_DEFAULT))
             self.assertNotIn("machine_answerability", res.audit_errors)
             self.assertNotIn("engagement", res.audit_errors)
         finally:
@@ -221,9 +221,9 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
 
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
-    def test_findings_from_all_six_audits_reach_unified_report(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
+    def test_findings_from_all_default_audits_reach_unified_report(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
         mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
-        """5. Findings produced by each of the six audits flow into the unified report."""
+        """5. Findings produced by each of the seven audits flow into the unified report."""
         mock_crawl.return_value = self._mock_crawled()
 
         from src.orchestrator import AUDIT_REGISTRY, _ensure_optional_audits_registered
@@ -246,19 +246,23 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
                 Finding(id="ENG-CLUT-001", title="Visual clutter", severity="medium", evidence="Dense banners.",
                         suggested_action=SuggestedAction("Reduce banners.", priority=2), priority=2)
             ],
-            "evidence_consistency": [
-                Finding(id="EVID-PRC-001", title="Price mismatch", severity="high", evidence="Schema $20, DOM $30.",
-                        suggested_action=SuggestedAction("Align prices.", priority=1), priority=1)
-            ],
             "freshness_corroboration": [
-                Finding(id="FC-DATE-001", title="Outdated timestamp", severity="low", evidence="Modified 2018.",
-                        suggested_action=SuggestedAction("Update timestamp.", priority=3), priority=3)
+                Finding(id="FC-DATE-001", title="Stale publish date", severity="medium", evidence="2020-01-01.",
+                        suggested_action=SuggestedAction("Update date.", priority=2), priority=2)
+            ],
+            "evidence_consistency": [
+                Finding(id="EVID-PRC-001", title="Price inconsistent", severity="medium", evidence="Price mismatch.",
+                        suggested_action=SuggestedAction("Align price.", priority=2), priority=2)
+            ],
+            "t4_indexability": [
+                Finding(id="T4-CAN-001", title="Soft-404 content", severity="medium", evidence="Thin content.",
+                        suggested_action=SuggestedAction("Add content.", priority=2), priority=2)
             ],
         }
 
         original_registry = dict(AUDIT_REGISTRY)
         try:
-            for name in _ALL_SIX:
+            for name in _ALL_DEFAULT:
                 AUDIT_REGISTRY[name] = lambda obs, n=name: list(mock_findings[n])
 
             res, rep = run_audit_full("https://example.com/")
@@ -268,13 +272,13 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             findings = report_dict["findings"]
             found_ids = [f["id"] for f in findings]
 
-            self.assertEqual(len(findings), 6)
-            for expected_id in ["MA-HEAD-001", "TR-INT-001", "CR-CAN-001", "ENG-CLUT-001", "EVID-PRC-001", "FC-DATE-001"]:
+            self.assertEqual(len(findings), len(_ALL_DEFAULT))
+            for expected_id in ["MA-HEAD-001", "TR-INT-001", "CR-CAN-001", "ENG-CLUT-001", "EVID-PRC-001", "FC-DATE-001", "T4-CAN-001"]:
                 self.assertIn(expected_id, found_ids)
 
-            # Verify source_audit attribution covers all six audits
+            # Verify source_audit attribution covers all seven audits
             source_audits = {f["source_audit"] for f in findings}
-            self.assertEqual(source_audits, set(_ALL_SIX))
+            self.assertEqual(source_audits, set(_ALL_DEFAULT))
         finally:
             AUDIT_REGISTRY.clear()
             AUDIT_REGISTRY.update(original_registry)
@@ -283,7 +287,7 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
     @patch("src.orchestrator.crawl_site")
     def test_objective_mapping_and_priority_ordering_with_all_six_audits(self, mock_crawl: MagicMock, mock_build: MagicMock) -> None:
         mock_build.return_value = _make_mock_site_context(obs=self._mock_observation())
-        """6. Objective mapping and priority engine work correctly after all six audits run."""
+        """6. Objective mapping and priority engine work correctly after all seven audits run."""
         mock_crawl.return_value = self._mock_crawled()
 
         from src.orchestrator import AUDIT_REGISTRY, _ensure_optional_audits_registered
@@ -303,11 +307,12 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             "engagement": [],
             "evidence_consistency": [],
             "freshness_corroboration": [],
+            "t4_indexability": [],
         }
 
         original_registry = dict(AUDIT_REGISTRY)
         try:
-            for name in _ALL_SIX:
+            for name in _ALL_DEFAULT:
                 AUDIT_REGISTRY[name] = lambda obs, n=name: list(mock_findings[n])
 
             req = AuditRequest(
@@ -383,7 +388,7 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
                     priority=1,
                 )
             ]
-            for name in _ALL_SIX:
+            for name in _ALL_DEFAULT:
                 if name != "machine_answerability":
                     AUDIT_REGISTRY[name] = lambda obs: []
 
@@ -397,8 +402,8 @@ class TestUnifiedSixAuditPipeline(unittest.TestCase):
             self.assertIn("findings", d)
             self.assertIn("audits_run", d)
 
-            # audits_run reflects all six
-            self.assertEqual(d["audits_run"], list(_ALL_SIX))
+            # audits_run reflects all seven
+            self.assertEqual(d["audits_run"], list(_ALL_DEFAULT))
 
             # Summary structure
             self.assertIn("total_findings", d["summary"])

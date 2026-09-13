@@ -55,6 +55,7 @@ from src.orchestrator import (
     run_audit_full,
 )
 from unittest.mock import MagicMock
+from tests.testing_helpers import _stub_t4_no_findings
 
 def _make_mock_site_context(is_success=True, error_message=None, obs=None):
     ctx = MagicMock()
@@ -146,6 +147,7 @@ class TestValidUrlPipeline(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_valid_url_produces_findings(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -166,6 +168,7 @@ class TestValidUrlPipeline(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_clean_page_returns_empty_findings(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -259,6 +262,7 @@ class TestFindingAggregation(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_findings_from_both_audits_present(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -315,6 +319,7 @@ class TestConservativeDeduplication(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_exact_duplicate_removed(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -419,6 +424,7 @@ class TestAuditFailureIsolation(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_one_audit_crash_preserves_others(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -439,6 +445,7 @@ class TestAuditFailureIsolation(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_both_audits_crash_empty_findings(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -586,6 +593,7 @@ class TestTaskContextPreservation(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_run_audit_full_returns_report(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -615,6 +623,7 @@ class TestTaskContextPreservation(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_run_audit_full_wires_downstream_stages(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -677,6 +686,7 @@ class TestFindingPreservation(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_all_finding_fields_preserved(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:

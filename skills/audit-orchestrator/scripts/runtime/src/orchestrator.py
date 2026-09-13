@@ -95,7 +95,7 @@ def _ensure_optional_audits_registered() -> None:
         )
 
 
-# Deterministic default execution order — all six specialist audits run by default.
+# Deterministic default execution order — all seven specialist audits run by default.
 # Explicit audit selection (via AuditRequest.audits or AuditOptions.audits) overrides this.
 _DEFAULT_AUDITS: tuple[str, ...] = (
     "machine_answerability",
@@ -104,6 +104,7 @@ _DEFAULT_AUDITS: tuple[str, ...] = (
     "engagement",
     "evidence_consistency",
     "freshness_corroboration",
+    "t4_indexability",
 )
 
 # ---------------------------------------------------------------------------
@@ -493,9 +494,9 @@ def run_audit_full(
 
     This is the designated marketplace entrypoint covering both AI discoverability
     and on-site engagement. It builds on run_audit() — which already defaults to
-    all six specialist audits — and adds the downstream reasoning stages:
+    all seven specialist audits — and adds the downstream reasoning stages:
 
-        run_audit (fetch → observe → all-six audits → aggregate)
+        run_audit (fetch → observe → all-default audits → aggregate)
             ↓ Objective Mapping    (map_findings_to_objectives)
             ↓ Priority Engine      (collect_signals → compute_priorities)
             ↓ Final Report         (build_report)

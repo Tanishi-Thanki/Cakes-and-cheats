@@ -44,6 +44,7 @@ ALL_REGISTERED_AUDITS = (
     "engagement",
     "evidence_consistency",
     "freshness_corroboration",
+    "t4_indexability",
 )
 
 
@@ -304,17 +305,18 @@ class TestRealOrchestratorPipeline(unittest.TestCase):
         self._mock_get.return_value = response
 
     @patch("src.crawler.crawler.requests.get")
-    def test_default_execution_runs_all_six_audits(self, mock_get: MagicMock) -> None:
+    def test_default_execution_runs_all_seven_audits(self, mock_get: MagicMock) -> None:
         self._mock_get = mock_get
         self._mock_fetch("<html><head><title>Example</title></head><body><h1>Example</h1><p>Content here.</p></body></html>", "https://example.com/")
         from src.orchestrator import _DEFAULT_AUDITS, run_audit
         result = run_audit("https://example.com/")
         self.assertTrue(result.is_success)
         self.assertEqual(list(result.options.audits), list(_DEFAULT_AUDITS))
-        self.assertEqual(len(result.options.audits), 6)
+        self.assertEqual(len(result.options.audits), len(_DEFAULT_AUDITS))
+        self.assertIn("t4_indexability", result.options.audits)
 
     @patch("src.crawler.crawler.requests.get")
-    def test_run_audit_full_defaults_to_all_six_audits(self, mock_get: MagicMock) -> None:
+    def test_run_audit_full_defaults_to_all_seven_audits(self, mock_get: MagicMock) -> None:
         self._mock_get = mock_get
         self._mock_fetch("<html><head><title>Example</title></head><body><h1>Example</h1><p>Content here.</p></body></html>", "https://example.com/")
         from src.orchestrator import _DEFAULT_AUDITS, run_audit_full
@@ -322,6 +324,7 @@ class TestRealOrchestratorPipeline(unittest.TestCase):
         self.assertTrue(result.is_success)
         self.assertEqual(list(result.options.audits), list(_DEFAULT_AUDITS))
         self.assertEqual(report.audits_run, list(_DEFAULT_AUDITS))
+        self.assertIn("t4_indexability", report.audits_run)
 
     @patch("src.crawler.crawler.requests.get")
     def test_explicit_all_audits_report_and_json(self, mock_get: MagicMock) -> None:
@@ -422,11 +425,15 @@ class TestRealOrchestratorPipeline(unittest.TestCase):
             AuditOptions(audits=ALL_REGISTERED_AUDITS),
         )
         self.assertTrue(result.is_success)
-        self.assertEqual(result.findings, [])
+        # The deterministic t4_indexability audit reports only informational low findings
+        # on this clean page (no index directive, no canonical, JSON-LD present).
+        self.assertEqual(sorted(f.id for f in result.findings), ["T4-005", "T4-020", "T4-031", "T4-032"])
+        self.assertTrue(all(f.source_audit == "t4_indexability" for f in result.findings))
         d = report.as_final_dict()
-        self.assertEqual(d["summary"]["total_findings"], 0)
-        self.assertEqual(d["findings"], [])
-        json.loads(report.to_json())
+        self.assertEqual(d["summary"]["total_findings"], 4)
+        self.assertEqual(len(d["findings"]), 4)
+        parsed = json.loads(report.to_json())
+        self.assertEqual(parsed, report.as_final_dict())
 
 
 class TestEvidenceConsistencyThroughFullChain(unittest.TestCase):

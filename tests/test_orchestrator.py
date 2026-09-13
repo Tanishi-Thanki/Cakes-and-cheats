@@ -39,6 +39,7 @@ from src.orchestrator import (
     run_audit,
 )
 from unittest.mock import MagicMock
+from tests.testing_helpers import _stub_t4_no_findings
 
 def _make_mock_site_context(is_success=True, error_message=None, obs=None):
     ctx = MagicMock()
@@ -155,6 +156,7 @@ class TestRunAuditSuccess(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_successful_orchestration_returns_audit_result(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -354,6 +356,7 @@ class TestAuditFailureIsolation(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_ma_failure_does_not_prevent_tr(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -376,6 +379,7 @@ class TestAuditFailureIsolation(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_tr_failure_does_not_prevent_ma(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -406,6 +410,7 @@ class TestFindingCollection(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_findings_from_both_audits_collected(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -462,6 +467,7 @@ class TestDeduplication(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_orchestrator_deduplicates_duplicate_findings(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -488,6 +494,7 @@ class TestSeverityPriorityPreservation(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_severity_and_priority_unchanged(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -516,6 +523,7 @@ class TestFindingImmutability(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_finding_objects_are_not_mutated(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -581,6 +589,7 @@ class TestIncludeDetailsGate(unittest.TestCase):
     @patch("src.orchestrator.audit_machine_answerability")
     @patch("src.orchestrator.build_site_audit_context")
     @patch("src.orchestrator.crawl_site")
+    @_stub_t4_no_findings
     def test_details_present_in_report_when_enabled(
         self, mock_crawl, mock_build, mock_ma, mock_tr
     ) -> None:
@@ -624,7 +633,7 @@ class TestIncludeDetailsGate(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestDefaultAuditSelection(unittest.TestCase):
-    """Test 16 — default AuditOptions runs both registered audits exactly once each."""
+    """Test 16 — default AuditOptions runs the full default audit pipeline exactly once each."""
 
     @patch("src.orchestrator.audit_task_readiness")
     @patch("src.orchestrator.audit_machine_answerability")
@@ -644,8 +653,8 @@ class TestDefaultAuditSelection(unittest.TestCase):
         mock_ma.assert_called_once()
         mock_tr.assert_called_once()
 
-    def test_default_audits_tuple_covers_all_six_skills(self) -> None:
-        """Test 16b: _DEFAULT_AUDITS covers all six specialist audits."""
+    def test_default_audits_tuple_covers_all_seven_skills(self) -> None:
+        """Test 16b: _DEFAULT_AUDITS covers all seven specialist audits incl. t4_indexability."""
         for name in (
             "machine_answerability",
             "task_readiness",
@@ -653,15 +662,66 @@ class TestDefaultAuditSelection(unittest.TestCase):
             "engagement",
             "evidence_consistency",
             "freshness_corroboration",
+            "t4_indexability",
         ):
             self.assertIn(name, _DEFAULT_AUDITS)
 
-    def test_audit_registry_contains_both_skills(self) -> None:
-        """Test 16c: AUDIT_REGISTRY maps both audit names to callable functions."""
-        self.assertIn("machine_answerability", AUDIT_REGISTRY)
-        self.assertIn("task_readiness", AUDIT_REGISTRY)
-        self.assertTrue(callable(AUDIT_REGISTRY["machine_answerability"]))
-        self.assertTrue(callable(AUDIT_REGISTRY["task_readiness"]))
+    def test_audit_registry_contains_all_registered_audits(self) -> None:
+        """Test 16c: AUDIT_REGISTRY maps every default audit name to a callable function."""
+        for name in _DEFAULT_AUDITS:
+            self.assertIn(name, AUDIT_REGISTRY)
+            self.assertTrue(callable(AUDIT_REGISTRY[name]))
+
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_default_run_invokes_t4_indexability_exactly_once(self, mock_crawl, mock_build) -> None:
+        """Test 16d: A default run invokes the registered t4_indexability audit exactly once."""
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
+
+        original_registry = dict(AUDIT_REGISTRY)
+        calls: list[str] = []
+        try:
+            orig_t4 = AUDIT_REGISTRY["t4_indexability"]
+
+            def spy_t4(obs):
+                calls.append("t4_indexability")
+                return orig_t4(obs)
+
+            AUDIT_REGISTRY["t4_indexability"] = spy_t4
+
+            res = run_audit("https://example.com/")
+            self.assertTrue(res.is_success)
+            self.assertEqual(calls, ["t4_indexability"])
+        finally:
+            AUDIT_REGISTRY.clear()
+            AUDIT_REGISTRY.update(original_registry)
+
+    @patch("src.orchestrator.build_site_audit_context")
+    @patch("src.orchestrator.crawl_site")
+    def test_explicit_t4_selection_runs_only_t4(self, mock_crawl, mock_build) -> None:
+        """Test 16e: Explicit audits=('t4_indexability',) runs t4 exactly once and nothing else."""
+        mock_crawl.return_value = _make_mock_crawl_result()
+        mock_build.return_value = _make_mock_site_context()
+
+        original_registry = dict(AUDIT_REGISTRY)
+        calls: list[str] = []
+        try:
+            for name, fn in original_registry.items():
+                def make_spy(n: str, fn):
+                    def spy(obs):
+                        calls.append(n)
+                        return fn(obs)
+                    return spy
+                AUDIT_REGISTRY[name] = make_spy(name, fn)
+
+            res = run_audit("https://example.com/", options=AuditOptions(audits=("t4_indexability",)))
+            self.assertTrue(res.is_success)
+            self.assertEqual(list(res.options.audits), ["t4_indexability"])
+            self.assertEqual(calls, ["t4_indexability"])
+        finally:
+            AUDIT_REGISTRY.clear()
+            AUDIT_REGISTRY.update(original_registry)
 
 
 # ---------------------------------------------------------------------------
@@ -725,7 +785,7 @@ class TestDataclassContracts(unittest.TestCase):
     """Verify that AuditOptions and AuditResult meet their documented contracts."""
 
     def test_audit_options_defaults(self) -> None:
-        """AuditOptions() without arguments should default to all six specialist audits."""
+        """AuditOptions() without arguments should default to all specialist audits."""
         opts = AuditOptions()
         for name in (
             "machine_answerability",
@@ -734,6 +794,7 @@ class TestDataclassContracts(unittest.TestCase):
             "engagement",
             "evidence_consistency",
             "freshness_corroboration",
+            "t4_indexability",
         ):
             self.assertIn(name, opts.audits)
         self.assertFalse(opts.include_details)
@@ -797,7 +858,7 @@ class TestCrawlRenderDefaultRegistration(unittest.TestCase):
     """Test 19 — crawl_render is in both _DEFAULT_AUDITS and AUDIT_REGISTRY."""
 
     def test_crawl_render_in_default_audits(self) -> None:
-        """Test 19a: 'crawl_render' IS in _DEFAULT_AUDITS (all six audits are default)."""
+        """Test 19a: 'crawl_render' IS in _DEFAULT_AUDITS (all seven audits are default)."""
         self.assertIn("crawl_render", _DEFAULT_AUDITS)
 
     def test_crawl_render_in_registry_after_optional_registration(self) -> None:
