@@ -36,8 +36,10 @@ def _fact_to_finding(fact: AggregatedFact) -> Finding | None:
     values and URLs.
     """
     status = fact.cross_page_status
-    # We only emit findings for material issues.
-    if status in ("MATCH", "SINGLE_PAGE"):
+    # We only emit findings for material issues. Ambiguous or under-evidenced
+    # facts (different billing periods, currencies, promotions, or a single weak
+    # source) are preserved in the inventory but must never surface as findings.
+    if status not in ("CONFLICT", "HISTORICAL", "FUTURE", "EXPIRED"):
         return None
 
     # Map status to a short ID prefix – these are stable across runs.
