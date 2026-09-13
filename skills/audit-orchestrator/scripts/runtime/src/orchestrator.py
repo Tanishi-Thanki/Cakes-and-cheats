@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Union
 
 from src.audits.finding_aggregator import (
@@ -54,6 +55,12 @@ from src.observation.observation import PageObservation
 from src.audits.p2_audit import audit_p2_evidence
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_iso_timestamp() -> str:
+    """Timezone-aware UTC ISO-8601 timestamp (millisecond precision, Z suffix)."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
 
 # ---------------------------------------------------------------------------
 # Audit registry — internal only. Add future audits here without touching
@@ -563,6 +570,7 @@ def run_audit_full(
         target_objectives=target_objectives,
         objective_mappings=objective_mappings,
         priority_signals=priority_signals,
+        audited_at=_utc_iso_timestamp(),
     )
 
     return result, report

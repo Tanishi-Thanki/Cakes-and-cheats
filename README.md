@@ -1,336 +1,447 @@
-# Machine Answerability Audit Skills — Marketplace
+# Brand AI Readiness Audit — Deterministic Website Evaluator for AI Agents
 
-A provider-neutral, deterministic **agent-skill marketplace** for evaluating whether an AI
-agent can effectively complete a task on any given website. The marketplace composes modular
-audit skills through a single orchestrator entrypoint and produces one structured JSON report.
+> Marketplace: `brand-ai-readiness-audit` v1.0.0 · Agent Skill Marketplace ·
+> single entrypoint: `audit-orchestrator` (`"entrypoint": true` in `marketplace.json`)
 
-## What This Marketplace Does
+## The Problem
 
-It answers, with evidence, a focused question:
+The web's front door is changing. More and more users reach websites through **AI agents** —
+answer engines, copilots, shopping assistants, and automations — that must *read* a site
+directly, *judge* it, and *act* on it. A site can be fine-tuned for human search ranking and
+still fail agents completely: content embedded in images instead of readable text, prices that
+contradict each other across pages, checkout behind a surprise login, key information that only
+exists after JavaScript runs.
 
-> Can an automated agent **FIND → READ → UNDERSTAND → TRUST → DECIDE/RECOMMEND → ARRIVE →
-> CONTINUE THE TASK** on this page?
+An agent that cannot reliably find, read, understand, trust, and act on a website will quietly
+drop it — no matter how high it ranks. Traditional SEO measures visibility and rankings, not
+**executability**, and nothing audits for the agent experience. This marketplace closes that
+gap. It answers one focused, evidence-backed question:
 
-Each audit skill addresses part of that journey, and the orchestrator composes their findings
-into a single evidence-backed report. The output is structured JSON — designed to be consumed
-by an agent, an evaluation harness, or a marketplace runtime — never a dashboard or PDF.
+> Can an AI agent **FIND → READ → UNDERSTAND → TRUST → DECIDE → ARRIVE → CONTINUE THE TASK**
+> on this website?
 
-## Why This Is Different From Traditional SEO Auditing
+It answers deterministically, from public HTML alone — no browser, no trainer, no external AI
+call — and reports every answer as structured, audit-grade evidence.
 
-This is **not**:
+## What It Delivers
 
-- SEO scoring or keyword auditing
-- Page-speed / performance auditing
-- Generic website linting or HTML validation
-- A "health score" that measures how a site looks to a search engine
+A provider-neutral, deterministic **Agent Skill Marketplace** that composes seven modular
+audit skills behind one entrypoint, runs a bounded read-only crawl of the target site, and
+emits **one structured JSON report** covering two dimensions:
 
-Traditional SEO tools measure discoverability and ranking signals. This marketplace measures
-**task executability by an AI agent**: whether the information can be extracted, understood,
-trusted, acted upon, and continued. The currency is evidence and structure, not rankings or
-keywords.
+| Dimension | Question it answers |
+|---|---|
+| Off-site — discoverability & answerability | Can an external, AI-driven client find, index, read, and trust this site's content? |
+| On-site — engagement & task completion | Can the site orient the visitor and carry a task forward to completion? |
 
-## High-Level Architecture
+## How to Run This Marketplace (Agentic Harness)
+
+This repository is a genuine Agent Skill Marketplace: the evaluator is given `marketplace.json`
+and a target website, and is expected to **use the skills** it declares. There is no hidden
+script — everything an agent needs is discoverable:
+
+1. **Inventory the skills** — open `marketplace.json`. It declares **7 skills**, each with an
+   `id`, a `path`, and — on exactly one of them (`audit-orchestrator`) — `"entrypoint": true`.
+
+2. **Read the skill contracts** — each skill folder contains a `SKILL.md` that states what the
+   skill consumes (`PageObservation`) and produces (`Finding`). Six of the seven are
+   declarative specs; the entrypoint skill is the one that executes them.
+
+3. **Invoke the single entrypoint** against the website — via its CLI:
+
+   `python skills/audit-orchestrator/scripts/run_audit.py <website-url>`
+
+   Optionally pass task context so findings are prioritized against the actual job:
+   `... --intent "..." --objectives transaction_completion,... --details`
+
+4. **Consume the one JSON report** — it goes to stdout (or a file via `-o`). Exit code `0`
+   means the audit ran; `1` means it did not, so a harness can branch on it.
+
+5. **Use the findings** — each finding carries an ID, title, severity, concrete evidence, and
+   a suggested action. With task context it also carries affected objectives, task relevance,
+   and a transparent priority reason.
+
+The entrypoint runs the entire marketplace in one call — crawl, observation, all seven
+specialist audits, cross-page layers, aggregation, and (optionally) objective mapping. No skill
+is invoked in isolation; there is exactly one execution path.
+
+## Marketplace Structure
 
 ```
-Audit Request (URL + optional task context)
-  ↓
-Audit Orchestrator  run_audit() / run_audit_full()  (single entrypoint)
-  ↓
-Crawl               bounded, same-site BFS (page + depth limits, robots.txt,
-                    sitemap discovery) — one read-only HTTP GET per page
-  ↓
-Observe             one deterministic HTML parse per crawled page (no network)
-  ↓
-PageObservation collection (one per page: text, structure, links, metadata)
-  ↓
-Specialist Audits   seven default audits, run per-page observation
-  ├─ machine_answerability      FIND / READ / UNDERSTAND
-  ├─ task_readiness             DECIDE / ARRIVE
-  ├─ crawl_render               FIND / READ / TRUST
-  ├─ engagement                 CONTINUE THE TASK
-  ├─ evidence_consistency       EVIDENCE / TRUST
-  ├─ freshness_corroboration    TRUST
-  └─ t4_indexability            INDEXABILITY / REACHABILITY
-  ↓
-Multi-page layers   always run on the complete observation collection
-  ├─ p2_evidence                cross-page evidence contradictions
-  └─ entity_identity            entity identity (MATCH / CONFLICT / AMBIGUITY)
-  ↓
-Finding Aggregation conservative deduplication + deterministic ID hardening
-  ↓
-Objective Mapping   maps findings to task objectives & relevance
-  ↓
-Priority Engine     task-aware prioritization & transparent reasoning
-  ↓
-Final Report        unified structured JSON report
+marketplace.json                       # skill manifest (name, version, paths, entrypoint flag)
+README.md                              # this document
+requirements.txt                       # pinned dependencies
+scripts/
+  validate_marketplace.py              # structural validation of the marketplace itself
+skills/
+  audit-orchestrator/                  # ENTRYPOINT — the only skill with an executable
+    SKILL.md
+    scripts/
+      run_audit.py                     # CLI entrypoint
+      runtime/src/                     # the full engine
+        orchestrator.py                # pipeline + internal audit registry
+        crawler/                       # crawl_session, crawler, robots_sitemaps,
+                                       # site_context, url_utils
+        observation/                   # PageObservation model + PageSignals
+        audits/                        # seven specialist audits + aggregation layers
+  machine-answerability-audit/SKILL.md
+  task-readiness-audit/SKILL.md
+  crawl-render-audit/SKILL.md
+  engagement-audit/SKILL.md
+  evidence-consistency-audit/SKILL.md
+  freshness-corroboration/SKILL.md     # note: no "-audit" suffix, matching marketplace.json
 ```
 
-## Default Audit Set
+## Tech Stack
 
-`run_audit` and `run_audit_full` default to **seven specialist audits**
-(`_DEFAULT_AUDITS` in the orchestrator registry). Each audit consumes a single
-`PageObservation` and emits `Finding` objects; findings are tagged with their
-source audit before aggregation.
+Python 3, standard-library-first — the pipeline is deterministic and dependency-light by
+design:
 
-| Registry name | Stage | Responsibility |
-|---------------|-------|----------------|
-| `machine_answerability` | FIND / READ / UNDERSTAND | Can key information be extracted and understood? |
-| `task_readiness` | DECIDE / ARRIVE | Can the task actually be executed? |
-| `crawl_render` | FIND / READ / TRUST | Reachability, protocol delivery, and client-side render accessibility |
-| `engagement` | CONTINUE THE TASK | Does the page orient and continue the referred visitor? |
-| `evidence_consistency` | EVIDENCE / TRUST | Same-context evidence/provenance classification (MATCH / CONFLICT / HISTORICAL / AMBIGUOUS / INSUFFICIENT_EVIDENCE) behind trustworthy facts |
-| `freshness_corroboration` | TRUST | Are representations consistent and time-sensitive facts current? |
-| `t4_indexability` | INDEXABILITY | Technical delivery barriers (redirects, robots/X-Robots-Tag, canonical conflicts, XML sitemap issues) |
+| Layer | Technology |
+|---|---|
+| Language | Python 3 (stdlib-first; no framework, no async runtime) |
+| HTTP client | `requests` — read-only GETs only |
+| HTML parsing | `beautifulsoup4` — one deterministic parse per page |
+| URLs / robots / sitemaps | stdlib: `urllib.parse`, `urllib.robotparser`, `xml.etree.ElementTree` |
+| Deterministic IDs & facts | stdlib: `hashlib` (SHA-256 ID hardening), `decimal` (exact price normalization) |
+| Reporting | stdlib: `json.dumps` (sorted keys, `ensure_ascii=False`, indent 2) |
+| Deliberately absent | browser / JS engine, database, LLM, ML, analytics, external AI APIs |
 
-Explicit audit selection (via `AuditRequest.audits` or `AuditOptions.audits`) overrides the default set.
+Dependencies are pinned in `requirements.txt` (`requests`, `beautifulsoup4`, plus their
+transitive pins); everything else is the Python standard library.
 
-In addition, two **always-on, multi-page analysis layers** run on the complete
-observation collection of every orchestrated run. They are not per-page specialist
-audits and are not listed in `audits_run`:
+## Entry Point
 
-- **`p2_evidence`** — cross-page evidence aggregation. Only a genuine value contradiction
-  (`CONFLICT`) produces a finding; uncertain or missing evidence never does.
-- **`entity_identity`** — deterministic, multi-signal entity-identity analysis across the
-  crawled pages.
+**CLI:** `python skills/audit-orchestrator/scripts/run_audit.py <url>`
+**Programmatic API:** `run_audit()` / `run_audit_full()` (exported from the bundled runtime)
 
-## Skill Decomposition
+- JSON report → stdout, or a file via `-o/--output`.
+- Exit code `0` on successful audit, `1` otherwise.
+- Flags: `--intent/-i`, `--description/-d`, `--objectives`, `--audits`, `--timeout`,
+  `--user-agent`, `--no-robots`, `--details`, `--output/-o`, plus the positional target URL
+  (or `--url`). See `--help` for full descriptions.
 
-The marketplace packages the audits as reusable Agent Skills (see `marketplace.json`).
-Each audit skill is a thin, self-contained specification consuming the shared
-`PageObservation` and emitting `Finding` objects. Skills do not depend on one another.
-New audits plug in by registering a conforming callable in the orchestrator registry —
+## End-to-End Pipeline
+
+```
+Target URL + optional task context (intent / description / objectives)
+  → 1  Normalize and validate the URL/request
+  → 2  Bounded, same-site, deterministic BFS crawl (robots-aware, sitemap discovery)
+  → 3  SiteAuditContext built once from crawl results — no re-fetching, no re-parsing
+  → 4  Collection-level layers: cross-page evidence + entity-identity analysis
+  → 5  Seven specialist audits run against shared PageObservation objects (isolated errors)
+  → 6  Aggregation: tag/source attribution → deduplication → ID disambiguation → stable sort
+  → 7  Objective mapping + priority engine (run_audit_full)
+  → 8  Unified structured JSON report
+```
+
+## How a Skill Works (Shared Contract)
+
+Every audit is a pure, stateless function over one shared input/output contract:
+
+- **Input:** a single `PageObservation` (specialist audits) or the full observation
+  collection (cross-page layers).
+- **Output:** a list of `Finding` objects (id, title, severity, evidence, suggested_action,
+  priority, confidence, source_audit, classification, details).
+
+The orchestrator keeps an **internal audit registry** (`_DEFAULT_AUDITS`) and resolves each
+requested audit name against it, running audits with isolated per-audit error handling.
+Adding a skill means registering a conforming callable in the registry plus a `SKILL.md` —
 no pipeline or reporting changes required.
 
-| Skill | Responsibility |
-|-------|----------------|
-| `audit-orchestrator` (entrypoint) | Composition, aggregation, objective mapping, priority engine, reporting |
-| `machine-answerability-audit` | FIND / READ / UNDERSTAND — can key information be extracted and understood? |
-| `task-readiness-audit` | DECIDE / ARRIVE — can the task actually be executed? |
-| `crawl-render-audit` | FIND / READ / TRUST — reachability, protocol delivery, and client-side render accessibility |
-| `engagement-audit` | CONTINUE THE TASK — orientation and task-continuation affordances |
-| `evidence-consistency-audit` | EVIDENCE / TRUST — shared evidence/provenance classification behind trustworthy facts |
-| `freshness-corroboration` | TRUST — representation consistency and currency of time-sensitive facts |
+## Bounded Crawler
 
-## Entrypoint Composition
+The crawler is read-only, strictly same-site over HTTP(S), and deterministic:
 
-The marketplace has exactly **one designated entrypoint**: the `audit-orchestrator`
-skill, implemented by `run_audit() / run_audit_full()` in the bundled runtime and the
-`run_audit.py` CLI. It:
+| Bound | Default |
+|---|---|
+| Max pages | 50 distinct URLs |
+| Max depth | 3 link hops from the start URL |
+| Per-request timeout | 10 s |
+| Max response body | 5 MB |
+| robots.txt | Checked before each page request (disable with `--no-robots`) |
+| Sitemap discovery | Enabled: ≤ 5 sitemap files, depth 3, ≤ 1000 URLs |
 
-- Receives the audit request with optional task context (`task_intent`, `task_description`, `target_objectives`).
-- Runs a **bounded, same-site crawl** from the target URL (page limit, depth limit,
-  per-request timeout, robots.txt, sitemap discovery) and observes each fetched page once.
-- Runs the seven default specialist audits per crawled page observation (or an explicitly requested subset).
-- Runs the two always-on multi-page layers (P2 evidence, entity identity) on the full observation collection.
-- Conservatively deduplicates findings and attributes each to its source audit.
-- Executes **Objective Mapping** to link findings to affected user/task objectives.
-- Executes the **Priority Engine** to provide task-aware ranking and actionable priority reasons.
-- Emits the unified final report.
+- robots.txt is honored before each page request and **fails open** when unavailable.
+- URLs beyond the budgets are recorded as unvisited with their reason; discovery sources are
+  `start`, `link`, and `sitemap`.
+- Canonicalization is deterministic: query parameters preserved, fragments dropped, unsafe
+  schemes (`javascript:`, `mailto:`, …) rejected.
+- Request budget: one robots.txt GET + one page GET per page; sitemap discovery adds one
+  robots.txt GET + up to five sitemap GETs. Worst-case bound derived from the configured
+  limits: ≈ **2 × 50 + 6 = 106 GETs per run** (a bound, not a measured benchmark).
 
-## Bounded Crawling / Site-Aware Behavior
+## Shared Observation Layer
 
-The system is **not** a single-page audit and **not** an unlimited or full-web crawler.
-`crawl_site` performs a deterministic, breadth-first crawl of a target site:
+Each successfully fetched page is parsed exactly once into a `PageObservation` — a
+structure-only, domain-neutral record that **captures facts and never judges quality**. It
+includes, where present: requested/final URL, HTTP status and success/error, title, meta
+description, canonical, H1/H2/H3, visible text, links, images, tables, JSON-LD, robots meta
+and X-Robots-Tag, Open Graph and Twitter Card metadata, structural components, content type,
+response headers, and derived structural signals.
 
-- **Same-site scope only**: only http(s) URLs sharing the site's host are followed;
-  external and unsupported schemes are ignored.
-- **Hard bounds**: `max_pages` (default 50 distinct URLs) and `max_depth` (default 3
-  link hops from the start URL). Discovery never exceeds these budgets.
-- **robots.txt**: robots.txt is fetched and honored before requests (enable/disable
-  via `AuditOptions.check_robots`).
-- **Sitemap discovery**: robots.txt `Sitemap:` records and the conventional
-  `/sitemap.xml` seed the crawl at depth 1, still within the same page/depth budget.
-- **Per-request timeout** and a single read-only HTTP GET per page; no browser
-  automation, no JavaScript execution.
-- **Structured failures**: fetch failures are categorized per page
-  (`invalid_url`, `robots_denied`, `dns_error`, `connection_error`, `timeout`,
-  `ssl_error`, `too_many_redirects`, `http_error`, `non_html`, `response_too_large`,
-  `decode_error`, …). A blocked or bot-protected site fails cleanly and is reported —
-  the tool makes no claim that arbitrary websites are always crawlable.
+Extraction is bounded: ≤ 200 components and ≤ 2000 characters of component text.
 
-Each successful page produces one `PageObservation`; the crawl result is composed
-into a structural `SiteAuditContext` (internal-link graph, per-URL discovery source,
-representative-page selection) that multi-page layers consume without re-fetching
-or re-parsing.
+## The Seven Specialist Audits
 
-## Observation Model
+Each specialist audit is a dedicated rule module. They are run per page observation; the two
+always-on collection-level layers (cross-page evidence, entity identity) are described after.
 
-`observe_page` extracts deterministic, domain-neutral facts from the fetched HTML:
+### `machine_answerability` — FIND / READ / UNDERSTAND
 
-- **Page facts**: final URL, status code, title, headings (h1/h2/h3), visible text,
-  links, images, tables, JSON-LD script blocks, content-type, response headers.
-- **Robots directives**: `<meta name="robots">` and `X-Robots-Tag` header values
-  (raw + normalized tokens).
-- **Social metadata**: Open Graph (`og:title`, `og:description`, `og:type`, `og:url`)
-  and Twitter Card (`twitter:title`, `twitter:description`, `twitter:card`).
-- **Content components** (`ComponentObservation`): structural blocks (`main`,
-  `article`, `section`, `nav`, `header`, `footer`, `form`, lists, pricing/product
-  card-like `div`s) with provenance — component kind, source tag, `id`/`class`
-  locator, nearest heading, bounded cleaned text, and the page URL they came from.
-- **Quantitative signals** (`PageSignals`): presence/count summaries (title, meta
-  description, canonical, links, images, tables, headings, components).
+The "can I extract it and understand it" audit. Inspects how information is represented:
+visible text volume, image-vs-text dependence, structured (JSON-LD) data, and whether
+structured facts have visible page context.
 
-Observation is a record of what is on the page; it never judges quality. All
-extraction is structural — no hostname, industry, CMS, or platform is special-cased.
+- `MA-IMG-001` — important content may be image-dependent (text buried in images).
+- `MA-TXT-001` — a structured page has a low textual representation.
+- `MA-CTX-001` — structured information lacks visible page context.
 
-## Entity Identity (P3-2)
+Fires on extraction/understanding risk — the classic "the machine can't read the page."
 
-`entity_identity` analyzes identity signals (domain, phone, email domain, address,
-name, category/sameAs) extracted from the crawled pages. It is **deterministic and
-offline** — it never uses an external web search, an LLM, or any third-party service.
+### `task_readiness` — DECIDE / RECOMMEND → ARRIVE
 
-Classification semantics (match the implementation):
+The "can the task actually get done" audit. Inspects navigation affordances, endpoints
+(links/forms/buttons), multi-step flows, authentication barriers, and decision-support
+evidence on transactional pages.
 
-- **MATCH** → no entity-identity finding.
-- **CONFLICT** → `ENT-ID-001` (high) — contradicting hard signals with no
-  explanatory relationship.
-- **AMBIGUOUS** → `ENT-ID-002` (medium) — split evidence, potential ambiguity.
-- **INSUFFICIENT_EVIDENCE** → no entity-identity finding.
+- `TR-INT-001` — a critical task action is non-navigable (no valid fallback link).
+- `TR-FORM-001` — an advertised capability has no actionable endpoint or navigation support.
+- `TR-PROC-001` — a multi-step workflow lacks structural guidance or step navigation.
+- `TR-AUTH-001` — a mandatory authentication barrier has no navigable entry point.
+- `TR-DATA-001` — a transactional page has a severe decision-evidence deficit.
 
-Name alone is never sufficient for a MATCH; the layer is deliberately conservative
-and false-positive-safe for subsidiaries, branches, and harmless formatting variants.
+Fires on "the task is blocked or the path to completion is missing."
 
-## Evidence Philosophy
+### `crawl_render` — access / delivery / render risk
 
-The marketplace treats **uncertainty as evidence about the evidence**, not as a
-defect. Missing, unknown, or ambiguous information is **not** automatically a
-problem:
+The "will an agent even reach and render the page" audit. Inspects fetch results, initial
+HTML payloads, redirect behavior, and canonical declarations.
 
-- Evidence states `MATCH`, `AMBIGUOUS`, `INSUFFICIENT_EVIDENCE`, and the temporal
-  states (`HISTORICAL`, `EXPIRED`, `FUTURE`) describe uncertainty about a signal and
-  **never** produce a finding by themselves.
-- **Only a genuine value contradiction** (`CONFLICT`) produces a finding. For
-  cross-page evidence, the P2 layer emits `EVID-001`; for same-page
-  cross-representation conflicts, `evidence_consistency` emits
-  `EVID-PRC-001` / `EVID-AVT-001` / `EVID-ENT-001` / `EVID-ATT-001`.
-- Legitimate variants (sale vs. original prices, price ranges, "from" prices,
-  different currencies) are resolved as `AMBIGUOUS`, never fabricated as conflicts.
+- `CR-001` — page is not reliably crawlable.
+- `CR-002` — limited initial HTML may require client-side rendering.
+- `CR-003` — problematic redirect destination / protocol downgrade (e.g. HTTPS → HTTP).
+- `CR-004` — problematic canonical declaration.
 
-## Evidence Aggregation and Attribution
+Client-render issues are inferred heuristically from the raw HTML — there is no browser.
 
-Evidence is carried on every finding as the `evidence` string plus structured
-`details`, and both survive aggregation and reporting unchanged (nothing is
-truncated, paraphrased, or collapsed into an opaque string). The shared provenance
-primitive (`EvidenceUnit` / `FactInventory` / `SiteEvidenceInventory`) records
-for each fact: entity, attribute, normalized value, raw text, source URL, source
-type, confidence, and temporal qualifier. There is no separate "citation" system
-and no external source verification — attribution is limited to what the local
-audit observed.
+### `engagement` — CONTINUE THE TASK
 
-## Finding Aggregation (Finding IDs)
+The "does the page orient and continue the visitor" audit. Inspects structural affordances on
+landing pages: orientation context, landing-context agreement, continuation cues, and
+multi-step guidance. It is **structural** — it never measures real clicks, dwell time, or
+conversion.
 
-Aggregation (`aggregate_findings`) runs after all audits in three deterministic steps:
+- `ENG-001` — generic landing-page orientation deficit.
+- `ENG-002` — specific landing context mismatch.
+- `ENG-003` — specific task-continuation deficit.
+- `ENG-004` — multi-step workflow guidance deficit.
 
-1. **Deduplicate**: two findings collapse only when the rule id AND the evidence
-   (up to whitespace) are identical.
-2. **Harden IDs**: every finding receives a deterministic, report-unique ID
-   (P3-4). A rule ID that occurs once keeps its original form; when the same rule
-   fires more than once in one report, each instance becomes `<RULE-ID>-<12-hex
-   digest>` (e.g. `T4-024-7d571a52cd37`), where the digest is a SHA-256 over the
-   rule id and the finding's own canonical evidence. IDs never depend on
-   generation order, `id()`, Python hash randomization, time, or randomness, and
-   they are stable across separate processes.
-3. **Sort**: by audit-supplied `priority` (ascending) then severity (critical →
-   low).
+### `evidence_consistency` — EVIDENCE / TRUST
 
-Single-instance rule conventions are preserved verbatim, including
-`ENT-ID-001`, `ENT-ID-002`, `EVID-001`, and all `T4-*` / `MA-*` / `TR-*` /
-`FC-*` / `CR-*` / `ENG-*` rule IDs.
+The "do the facts agree across the site" audit. Builds structured facts (price, availability,
+entity/brand/name, attributes) with exact decimal price normalization and emits a finding
+**only** for a genuine `CONFLICT` between representations.
 
-## Objective Mapping
+- `EVID-PRC-001` — conflicting product price declarations.
+- `EVID-AVT-001` — conflicting availability representations.
+- `EVID-ENT-001` — conflicting entity/brand/name declarations.
+- `EVID-ATT-001` — conflicting product attribute representations.
 
-`map_findings_to_objectives` links findings to canonical objectives
-(`transaction_completion`, `price_accuracy`, `price_evaluation`,
-`inventory_verification`, `entity_identity`, `information_sufficiency`, …)
-using a deterministic rule-to-objective taxonomy plus the caller-supplied
-`target_objectives` and `task_intent` keywords. When no task context is
-supplied, findings remain **general** with an empty `affected_objectives` list.
-Objective mapping only interprets relevance; it never creates or re-scopes
-findings.
+Uncertainty states (`AMBIGUOUS`, `INSUFFICIENT_EVIDENCE`, temporal) never fire on their own.
 
-## Priority and Severity
+### `freshness_corroboration` — TRUST
 
-Severity and priority are the audits' own values — the pipeline never invents,
-rewrites, or reinterprets them. The orchestrator orders findings by
-`priority` then `severity`. When task context is present, the Priority Engine
-ranks findings by task relevance (direct blocker → task-impairing → general),
-then audit priority, severity, confidence, and finally a stable ID tie-break,
-with a transparent, evidence-based `priority_reason`.
+The "is the site internally consistent and current" audit. Corroborates time-sensitive facts
+across representations. It evaluates explicit on-site signals only — it does not verify live
+ground truth externally.
 
-## Recommendations
+- `FC-REP-001/002` — conflicting price / availability representations.
+- `FC-ATTR-001` — conflicting product attribute representations.
+- `FC-ENT-001/002` — conflicting entity identity / brand representations.
+- `FC-FRSH-001` — limited freshness evidence for time-sensitive information.
 
-The only recommendation artifact is the per-finding `suggested_action`
-(a `summary` string plus a `priority`), produced by the audits themselves and
-preserved verbatim into the report. There is no separate recommendation engine.
+### `t4_indexability` — INDEXABILITY / REACHABILITY
 
-## Final Report Concept
+The "can external AI clients index it" audit. Inspects indexability directives (robots meta /
+X-Robots-Tag), canonical declarations, and JSON-LD structured data.
 
-The final report is a deterministic projection of structured data:
+- `T4-001/002` — page fetch failed / non-HTML response.
+- `T4-003/004/005` — explicit `noindex` / explicit `index` / indexability unspecified.
+- `T4-010/011` — robots meta / X-Robots-Tag directives present.
+- `T4-020…024` — canonical tag missing, self-referencing, unresolvable, external, or an
+  internal alternate URL.
+- `T4-030…035` — JSON-LD presence, detected `@type` values, missing `@context`/`@type`,
+  malformed JSON-LD blocks.
 
-- `site`, `audited_at` (caller-supplied only — never auto-generated)
-- `summary` with `total_findings` and per-severity counts (high / medium / low,
-  plus critical when present)
-- `findings` with id, title, severity, **full evidence**, priority, confidence,
-  source audit, `suggested_action` (summary + priority), and structured `details`
-- `task_context`, `affected_objectives`, `task_relevance`, and `priority_reason`
-  when task context is provided
-- structured `failure` / `audit_errors` when the pipeline or an individual audit fails
+Sitemaps are crawler-side discovery only — T4 does not analyze sitemap issues, and it does
+not analyze redirects generally (that is CR-003).
 
-`AuditReport.as_final_dict()` / `report_to_json()` emit sorted keys and no
-wall-clock data. Findings/evidence/objectives/priority/severity reach the final
-report exactly as the aggregation and downstream stages produced them.
+## Cross-Page Analysis (Always-On Layers)
 
-## How the Skills Work Together
+Two collection-level layers run over the complete crawl on every orchestrated run (they are
+per-run, not per-page, and are not listed in `audits_run`):
 
-1. **Crawl & Observe**: a bounded, same-site crawl (robots.txt, sitemap discovery,
-   page/depth limits) produces one deterministic observation per page.
-2. **Specialist Evaluation**: the seven default specialist audits evaluate each
-   page observation; the two multi-page layers evaluate the full collection.
-3. **Aggregation**: findings are combined without loss, deduplicated conservatively,
-   and given deterministic, report-unique IDs.
-4. **Objective Mapping**: findings are mapped to canonical objectives and
-   task-specific intents.
-5. **Priority Engine**: findings are prioritized by task relevance with transparent
-   rationales, using audit-supplied values.
-6. **Unified Report**: the final report is emitted as the single, JSON-serializable
-   contract for downstream consumers.
+- **Deterministic site context** — a normalized internal-link graph (nodes, edges,
+  incoming/outgoing relationships), external links, discovery sources, crawl statistics,
+  bounded unvisited records, and representative-page selection: ≤ 10 pages, deterministic,
+  homepage-first, then section/depth/connectivity signals — never random or ML-based.
+- **Cross-page evidence** (`SiteEvidenceInventory`) — aggregates facts across pages; only a
+  genuine value `CONFLICT` produces a contradiction finding (`EVID-001`). `AMBIGUOUS`,
+  `INSUFFICIENT_EVIDENCE`, `HISTORICAL`, `EXPIRED`, and `FUTURE` are records about
+  uncertainty, never defects on their own.
+- **Entity identity** — deterministic pairwise comparison of identity signals (domain, phone,
+  email domain, address, name). `CONFLICT` → `ENT-ID-001` (high); `AMBIGUOUS` → `ENT-ID-002`
+  (medium). Weak evidence is never treated as proof, and relationship text (branch,
+  subsidiary, franchise) can suppress false conflict classification.
 
-## Generalization Across Industries
+## Finding ID Index
 
-All signals are domain-neutral structural facts: headings, visible text, links, images,
-tables, structured data, URLs, and dates. Nothing is hard-coded to a particular industry,
-website, CMS, or e-commerce platform. The same skills evaluate shopping, services,
-publishing, health, education, government, and any other site.
+Every finding ID is stable and self-describing: `<AUDIT-PREFIX>-<ITEM>-<NNN>`. Single
+occurrences keep the base ID verbatim (e.g. `TR-AUTH-001`); when the same rule fires more
+than once in one report, the instance becomes `<RULE-ID>-<12-hex-sha256>` (e.g.
+`T4-024-7d571a52cd37`), so IDs are report-unique and reproducible.
 
-## Determinism / Read-Only / Provider Neutrality
+| Prefix | Audit / layer | Meaning of the item code |
+|---|---|---|
+| `MA-*` | machine_answerability | `IMG` image-dependent content · `TXT` low text · `CTX` structured data without visible context |
+| `TR-*` | task_readiness | `INT` non-navigable critical action · `FORM` capability w/o endpoint · `PROC` weak multi-step flow · `AUTH` auth barrier w/o entry · `DATA` decision-evidence deficit |
+| `CR-*` | crawl_render | `001` not reliably crawlable · `002` client-render risk · `003` bad redirect / protocol downgrade · `004` problematic canonical |
+| `ENG-*` | engagement | `001` generic orientation · `002` landing mismatch · `003` continuation deficit · `004` workflow guidance deficit |
+| `EVID-PRC/AVT/ENT/ATT-*` | evidence_consistency | price, availability, entity/brand/name, attribute contradictions (`CONFLICT` only) |
+| `FC-*` | freshness_corroboration | `REP` price/availability representation conflicts · `ATTR` attribute conflicts · `ENT` entity/brand conflicts · `FRSH` limited freshness evidence |
+| `T4-*` | t4_indexability | `001…005` fetch / indexability · `010…011` robots directives · `020…024` canonical · `030…035` JSON-LD |
+| `EVID-001` | cross-page evidence | collection-level contradiction (only `CONFLICT` fires) |
+| `ENT-ID-001/002` | entity identity | conflict (high) / ambiguity (medium) |
 
-The pipeline is deterministic for identical inputs and read-only with respect to
-audited sites:
+Findings carry a `classification` of `issue` or `observation`: an `observation` records a
+neutral fact worth knowing (e.g. an explicit `index` directive or JSON-LD presence), while an
+`issue` is an actionable defect. Severity governs `critical > high > medium > low`.
 
-- Zero LLM calls, zero external AI/ML APIs, zero analytics platforms.
-- No browser automation, no database, no persistence.
-- Dependencies are limited to `beautifulsoup4` (HTML parsing) and `requests`
-  (read-only HTTP GETs during the bounded crawl).
-- No writes to audited sites are ever made.
+## Findings, Evidence, and Suggested Actions
 
-Same URL + same HTML → same findings → same report. Because external network
-responses (redirects, CDN variation, bot protection) can naturally vary, exact
-reproducibility is guaranteed for identical inputs, not for the live web.
+The judge-friendly core of every finding:
 
-## Evaluation / Runtime Philosophy
+```json
+{
+  "id": "TR-AUTH-001",
+  "title": "Mandatory authentication barrier lacks navigable authentication entry point",
+  "severity": "medium",
+  "evidence": "Observed gated checkout/account endpoints with no visible public alternative.",
+  "suggested_action": {
+    "summary": "Expose a navigable (ideally public) path to the task.",
+    "priority": 1
+  }
+}
+```
 
-- **Evidence before inference**: a finding exists only when concrete observed facts support it.
-- **Conservative**: prefer no finding over a speculative one; never pretend an audit succeeded
-  when it failed.
-- **Structured failures**: concise diagnostic blocks, never stack traces in the consumer contract.
-- **Provider-neutral and user-respecting**: read-only at all times, no writes to audited sites.
+- **`evidence`** is the concrete observed fact that triggered the rule; it survives
+  aggregation and reporting verbatim — nothing is truncated or paraphrased.
+- **`suggested_action`** is produced by the audit itself and preserved into the report: a
+  `summary` plus a numeric `priority` (1 = highest).
+- `severity` and `priority` are separate concepts: severity describes the seriousness of the
+  finding; priority is the ordering signal — task relevance first when task context is
+  supplied, then audit priority, then severity, then confidence.
 
-## Entry Points
+Aggregation is conservative and deterministic: duplicate findings collapse only when rule ID
+**and** normalized evidence match; distinct evidence is never silently merged; source-audit
+attribution is preserved; colliding base IDs are deterministically disambiguated; ordering is
+stable.
 
-- Manifest: `marketplace.json` (single entrypoint = `audit-orchestrator`)
-- Orchestrator skill: `skills/audit-orchestrator/SKILL.md`
-- CLI Entrypoint: `python skills/audit-orchestrator/scripts/run_audit.py <URL>` — see
-  `--help` for `--intent`, `--description`, `--objectives`, `--audits`, `--timeout`,
-  `--user-agent`, `--no-robots`, `--details`, `--output`
-- Bundled Runtime: `skills/audit-orchestrator/scripts/runtime/src/`
-- Report serialization: `AuditReport.as_final_dict()` / `report_to_json(...)`
+## Task-Aware Objectives
+
+`AuditContext` accepts a task intent, a task description, and target objectives. Canonical
+objectives: `transaction_completion`, `task_completion`, `price_accuracy`, `price_evaluation`,
+`inventory_verification`, `entity_identity`, `information_sufficiency`, `content_discovery`,
+`content_extraction`, `workflow_progression`, `authentication_access`.
+
+Mapping is a deterministic rule-to-objective taxonomy over the finding ID, refined by
+caller-supplied objective keywords and intent keywords.
+
+- Without task context, findings remain `general` with an empty `affected_objectives` list —
+  the system never invents semantic relationships.
+- With task context, findings may be classified `direct_blocker`, `task_impairing`, or
+  `general`, ranked with a transparent, evidence-based `priority_reason`.
+
+## Output
+
+The final report is deterministic JSON:
+
+```json
+{
+  "site": "https://example.com/",
+  "audited_at": null,
+  "summary": { "total_findings": 3, "high": 0, "medium": 0, "low": 3 },
+  "audits_run": [
+    "machine_answerability", "task_readiness", "crawl_render",
+    "engagement", "evidence_consistency", "freshness_corroboration",
+    "t4_indexability"
+  ],
+  "findings": []
+}
+```
+
+- `audited_at` is caller-supplied only — it stays `null` otherwise, keeping output
+  deterministic.
+- Serialization: sorted keys, `indent=2`, `ensure_ascii=False`, stable ordering.
+- Optional `task_context`, `failure`, and `audit_errors` appear when relevant; failures are
+  structured diagnostic blocks, never stack traces in the consumer contract.
+
+## Safety / Read-Only Guarantees
+
+Strictly read-only. It does **not**: modify the audited website, submit forms, authenticate
+into private systems, run browser automation, execute JavaScript, call external AI/LLM APIs,
+use analytics, write to external databases, or perform destructive actions. It is **not** a
+full browser crawler, does not search the entire internet, and does not predict AI-provider
+ranking or citation outcomes.
+
+## Generalization
+
+Provider-neutral and industry-neutral. It evaluates generic observable website signals — HTML
+structure, visible text, headings, links, metadata, JSON-LD, canonical URLs, robots
+directives, structural components, pricing/availability representations, navigation and
+workflow affordances, and entity-identity signals. There are no per-client site whitelists;
+the registrable-domain public-suffix logic is generic DNS/domain structure, not a
+client-specific list.
+
+## Limitations (Deliberate Scope)
+
+- **No external or LLM verification** — freshness and correctness are based on explicit
+  on-site evidence, not live ground truth.
+- **Bounded crawl** — pages beyond 50 pages / depth 3 are not fetched (they are recorded as
+  unvisited with reasons).
+- **`engagement` is structural** — it assesses affordances, not behavioral analytics.
+- **Objective mapping is conservative** — without task context, findings stay `general`
+  rather than inventing semantic relationships.
+
+These are scope boundaries, not defects: determinism, read-only behavior, and honest
+evidence are the design goals.
+
+## Validation
+
+```text
+python scripts/validate_marketplace.py
+→ Result: PASS (7 skills, 0 failures, 0 warnings)
+```
+
+## Quick Start
+
+```text
+pip install -r requirements.txt
+python skills/audit-orchestrator/scripts/run_audit.py https://example.com/
+```
+
+With task context (objective-aware prioritization):
+
+```text
+python skills/audit-orchestrator/scripts/run_audit.py https://shop.example.com/ \
+  --intent "purchase running shoes" \
+  --objectives transaction_completion,price_accuracy,inventory_verification \
+  --details
+```
+
+Save to a file (harness-friendly):
+
+```text
+python skills/audit-orchestrator/scripts/run_audit.py https://example.com/ -o report.json
+```

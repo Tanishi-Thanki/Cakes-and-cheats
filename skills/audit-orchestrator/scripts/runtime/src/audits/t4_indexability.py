@@ -75,6 +75,28 @@ def _semantic_url(url: str) -> str:
 # Helper functions for each signal group
 # ---------------------------------------------------------------------------
 
+def _robots_directive_facts(obs: PageObservation) -> tuple[frozenset[str], list[str], list[str]]:
+    """Single source of truth over normalized robots directives.
+
+    Derived purely from the normalized observation tokens
+    (``robots_meta_directives`` / ``x_robots_tag_directives``) so every robots
+    finding (T4-003/T4-004/T4-005 and T4-010/T4-011) is computed from identical
+    evidence and cannot disagree. ``none`` is treated as equivalent to
+    ``noindex`` for the indexability decision and excluded from the per-source
+    token lists.
+
+    Returns:
+        (directives, meta_tokens, header_tokens): the union directive set plus
+        the non-``none`` meta and header tokens.
+    """
+    meta_tokens = [d for d in (obs.robots_meta_directives or ()) if d != "none"]
+    header_tokens = [d for d in (obs.x_robots_tag_directives or ()) if d != "none"]
+    directives = set(meta_tokens) | set(header_tokens)
+    if "none" in (obs.robots_meta_directives or ()) or "none" in (obs.x_robots_tag_directives or ()):
+        directives.add("noindex")
+    return frozenset(directives), meta_tokens, header_tokens
+
+
 def _indexability_findings(obs: PageObservation) -> List[Finding]:
     findings: List[Finding] = []
 
@@ -115,15 +137,19 @@ def _indexability_findings(obs: PageObservation) -> List[Finding]:
         )
 
     # 3. Explicit noindex / index handling
-    directives = set(obs.robots_meta_directives) | set(obs.x_robots_tag_directives)
-    # Treat 'none' as equivalent to 'noindex' for indexability decisions
-    if "none" in directives:
-        directives.add("noindex")
+    # Single shared evidence source: the normalized meta + header union from
+    # `_robots_directive_facts`, the same source as T4-010/T4-011, so T4-005
+    # (the else branch) can never co-occur with a detected noindex/index.
+    directives, meta_tokens, header_tokens = _robots_directive_facts(obs)
     # Determine source attribution for noindex/none directives
     source = []
-    if "noindex" in obs.robots_meta_directives or "none" in obs.robots_meta_directives:
+    if "noindex" in meta_tokens:
         source.append("meta")
-    if "noindex" in obs.x_robots_tag_directives or "none" in obs.x_robots_tag_directives:
+    if "noindex" in header_tokens:
+        source.append("header")
+    if not source and "none" in (obs.robots_meta_directives or ()):
+        source.append("meta")
+    if not source and "none" in (obs.x_robots_tag_directives or ()):
         source.append("header")
     # Add finding for noindex (including none) if present
     if "noindex" in directives:
@@ -161,11 +187,11 @@ def _indexability_findings(obs: PageObservation) -> List[Finding]:
         findings.append(
             Finding(
                 id="T4-005",
-                title="Indexability not explicitly specified",
+                title="No explicit indexing directive found",
                 severity="low",
-                evidence="Neither noindex nor index directives present.",
+                evidence="No explicit indexing directive found; default indexing behavior applies unless restricted elsewhere.",
                 suggested_action=SuggestedAction(
-                    summary="Do not assume the page is indexable; consider adding explicit directives.",
+                    summary="If the site's indexing policy requires explicit directives, consider adding one.",
                     priority=3,
                 ),
                 priority=3,
@@ -177,16 +203,16 @@ def _indexability_findings(obs: PageObservation) -> List[Finding]:
 
 def _robots_findings(obs: PageObservation) -> List[Finding]:
     findings: List[Finding] = []
-    # The 'none' token means "no directives present", not a directive itself.
-    # Exclude it so T4-010/T4-011 never report an empty/none directive list.
-    meta_directives = [d for d in obs.robots_meta_directives if d != "none"]
-    if meta_directives:
+    # Same normalized evidence as the T4-003/T4-004/T4-005 decision; the 'none'
+    # token means "no directives present" and is excluded from these lists.
+    _, meta_tokens, header_tokens = _robots_directive_facts(obs)
+    if meta_tokens:
         findings.append(
             Finding(
                 id="T4-010",
                 title="Robots meta directives present",
                 severity="low",
-                evidence=f"Meta directives: {', '.join(meta_directives)}",
+                evidence=f"Meta directives: {', '.join(meta_tokens)}",
                 suggested_action=SuggestedAction(
                     summary="Review robots meta directives for intended crawl behaviour.",
                     priority=3,
@@ -196,14 +222,13 @@ def _robots_findings(obs: PageObservation) -> List[Finding]:
                 classification="observation",
             )
         )
-    header_directives = [d for d in obs.x_robots_tag_directives if d != "none"]
-    if header_directives:
+    if header_tokens:
         findings.append(
             Finding(
                 id="T4-011",
                 title="X‑Robots‑Tag directives present",
                 severity="low",
-                evidence=f"Header directives: {', '.join(header_directives)}",
+                evidence=f"Header directives: {', '.join(header_tokens)}",
                 suggested_action=SuggestedAction(
                     summary="Review X‑Robots‑Tag header for intended crawl behaviour.",
                     priority=3,
