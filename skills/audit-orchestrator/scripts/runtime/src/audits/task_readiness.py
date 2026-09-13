@@ -35,6 +35,21 @@ MULTISTEP_KEYWORDS = re.compile(
     re.I,
 )
 
+# Process-specific evidence: a page must actually describe a *procedure* before
+# TR-PROC-001 can fire. A bare generic keyword such as "Requirements" or
+# "Prerequisites" is a checklist heading, not evidence of an unstructured
+# multi-step workflow, so it alone never triggers the finding.
+PROCESS_SPECIFIC_PATTERNS = re.compile(
+    r"(step\s*\d|steps?\s*\d|"
+    r"\b\d\s*\.\s+[A-Za-z]|"
+    r"how to (apply|register|enrol|enroll|sign ?up|complete|proceed|checkout|buy|submit|request|get started)|"
+    r"registration steps|onboarding steps|application process|enrollment steps|sign ?up steps|"
+    r"checkout process|fill out (?:the |the following )?steps|"
+    r"complete the (?:following )?steps|proceed through (?:the |the registration )?steps?|"
+    r"follow these steps)",
+    re.I,
+)
+
 # Mandatory authentication barrier indicators
 AUTH_BARRIER_KEYWORDS = re.compile(
     r"\b(login required|sign in to complete|members only|authentication required|log in to view price|must be logged in)\b",
@@ -191,49 +206,57 @@ def _check_unstructured_multistep_workflow(obs: PageObservation) -> list[Finding
     findings: list[Finding] = []
 
     text_to_check = " ".join(obs.h1 + obs.h2 + obs.h3) + " " + obs.visible_text[:1500]
-    match = MULTISTEP_KEYWORDS.search(text_to_check)
 
-    if match:
-        phrase = match.group(0)
+    # Gate 1: a workflow keyword is present at all.
+    if not MULTISTEP_KEYWORDS.search(text_to_check):
+        return findings
 
-        # Signal 1: Structured headings (h1/h2/h3 contains step numbers or step titles)
-        has_step_headings = any(
-            re.search(r"\b(step\s*\d|phase\s*\d|stage\s*\d|part\s*\d|1\.|2\.|3\.)\b", h, re.I)
-            for h in obs.h1 + obs.h2 + obs.h3
+    # Gate 2: the page actually describes a procedure (step markers, procedural
+    # phrases, ordered steps), not just a generic keyword like "Requirements".
+    proc_match = PROCESS_SPECIFIC_PATTERNS.search(text_to_check)
+    if not proc_match:
+        return findings
+
+    phrase = proc_match.group(0).strip()
+
+    # Signal 1: Structured headings (h1/h2/h3 contains step numbers or step titles)
+    has_step_headings = any(
+        re.search(r"\b(step\s*\d|phase\s*\d|stage\s*\d|part\s*\d|1\.|2\.|3\.)\b", h, re.I)
+        for h in obs.h1 + obs.h2 + obs.h3
+    )
+
+    # Signal 2: Step navigation links (Next, Continue, Step 2, Proceed)
+    has_step_links = any(
+        re.search(r"\b(next|continue|proceed|step\s*\d|start|get started)\b", l.anchor_text, re.I)
+        and l.href
+        and not l.raw_href.startswith("javascript:")
+        and l.raw_href != "#"
+        for l in obs.links
+    )
+
+    # Flag ONLY if multi-step text exists BUT visible headings are unstructured AND zero step links exist.
+    # Schema (HowTo/ItemList) does NOT rescue an unstructured visible workflow.
+    if not has_step_headings and not has_step_links:
+        evidence_str = (
+            f"Page describes a multi-step workflow ('{phrase}') in paragraph text, "
+            "but lacks structured heading steps (h1/h2/h3) and step navigation links ('Next', 'Continue'), "
+            "providing limited structural support for multi-step agent execution."
         )
-
-        # Signal 2: Step navigation links (Next, Continue, Step 2, Proceed)
-        has_step_links = any(
-            re.search(r"\b(next|continue|proceed|step\s*\d|start|get started)\b", l.anchor_text, re.I)
-            and l.href
-            and not l.raw_href.startswith("javascript:")
-            and l.raw_href != "#"
-            for l in obs.links
-        )
-
-        # Flag ONLY if multi-step text exists BUT visible headings are unstructured AND zero step links exist.
-        # Schema (HowTo/ItemList) does NOT rescue an unstructured visible workflow.
-        if not has_step_headings and not has_step_links:
-            evidence_str = (
-                f"Page describes a multi-step workflow ('{phrase}') in paragraph text, "
-                "but lacks structured heading steps (h1/h2/h3) and step navigation links ('Next', 'Continue'), "
-                "providing limited structural support for multi-step agent execution."
-            )
-            findings.append(
-                Finding(
-                    id="TR-PROC-001",
-                    title="Multi-step task workflow lacks structural guidance or step navigation",
-                    severity="medium",
-                    evidence=evidence_str,
-                    suggested_action=SuggestedAction(
-                        summary="Structure multi-step tasks using clear heading hierarchies (e.g. <h2>Step 1</h2>) and navigable step-transition links.",
-                        priority=2,
-                    ),
+        findings.append(
+            Finding(
+                id="TR-PROC-001",
+                title="Multi-step task workflow lacks structural guidance or step navigation",
+                severity="medium",
+                evidence=evidence_str,
+                suggested_action=SuggestedAction(
+                    summary="Structure multi-step tasks using clear heading hierarchies (e.g. <h2>Step 1</h2>) and navigable step-transition links.",
                     priority=2,
-                    confidence="medium",
-                    details={"matched_phrase": phrase},
-                )
+                ),
+                priority=2,
+                confidence="medium",
+                details={"matched_phrase": phrase},
             )
+        )
 
     return findings
 

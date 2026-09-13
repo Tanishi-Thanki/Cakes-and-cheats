@@ -8,6 +8,10 @@ from typing import Any, Literal
 SeverityLevel = Literal["critical", "high", "medium", "low"]
 ConfidenceLevel = Literal["high", "medium", "low"]
 
+# Classification of a finding: "issue" (actionable defect), "observation"
+# (healthy or neutral signal worth recording but not a defect to fix).
+FindingClassification = Literal["issue", "observation"]
+
 # Deterministic ordering for severity tie-breaks (lower = more severe).
 # Shared by every layer that ranks findings; defined once to prevent drift.
 SEVERITY_ORDER: dict[str, int] = {
@@ -55,3 +59,4 @@ class Finding:
     confidence: ConfidenceLevel = "medium"
     details: dict[str, Any] = field(default_factory=dict)
     source_audit: str = ""
+    classification: FindingClassification = "issue"

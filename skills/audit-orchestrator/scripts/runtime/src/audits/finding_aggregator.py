@@ -53,6 +53,7 @@ def tag_findings(
                 confidence=f.confidence,
                 details=dict(f.details) if f.details else {},
                 source_audit=source_audit,
+                classification=f.classification,
             )
         )
     return tagged

@@ -42,6 +42,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any, List, Literal, Optional
 
+from src.audits.domain_utils import registrable_domain
 from src.audits.models import Finding, SuggestedAction
 from src.observation.observation import PageObservation
 
@@ -90,7 +91,19 @@ def _normalize_name(raw: Optional[str]) -> Optional[str]:
 
 
 def _normalize_domain(raw: Optional[str]) -> Optional[str]:
-    """Extract the eTLD+1-like root domain from a URL or hostname string."""
+    """Extract the registrable-domain root from a URL or hostname string.
+
+    Subdomains are folded to their registrable parent (``www.``, ``help.``,
+    ``developer.`` all map to the site's root domain), so first-party
+    subdomains are never mistaken for different entities.
+
+    Args:
+        raw: A URL or hostname string.
+
+    Returns:
+        The registrable domain (e.g. 'example.com', 'co.uk example.co.uk'),
+        or None when no hostname can be extracted.
+    """
     if not raw:
         return None
     s = raw.strip().lower()
@@ -101,11 +114,11 @@ def _normalize_domain(raw: Optional[str]) -> Optional[str]:
             s = parsed.hostname or ""
         except Exception:
             return None
-    # Strip www.
-    s = re.sub(r"^www\.", "", s)
     # Keep only domain part (strip path)
     s = s.split("/")[0].split("?")[0].split("#")[0]
-    return s if s else None
+    if not s:
+        return None
+    return registrable_domain(s) or None
 
 
 def _normalize_phone(raw: Optional[str]) -> Optional[str]:
@@ -626,17 +639,33 @@ def compare_identity(
                 evidence["domain_b"] = dom_b
 
     # ---- 3. Phone comparison -----------------------------------------
+    # Attribution scoping: only a phone that is attributable to a named entity
+    # (structured JSON-LD Organization telephone) is compared as a hard signal.
+    # A phone that only appears in body text cannot be linked to a specific
+    # entity — pages often list several department/location numbers — so an
+    # observable difference between two free-text phones is never treated as a
+    # contradiction. Identical numbers still corroborate regardless of source.
     ph_a = signals_a.phone
     ph_b = signals_b.phone
     if ph_a and ph_b:
+        phone_a_raw = signals_a.raw_signals.get("phone_json") or signals_a.raw_signals.get("phone_vis", ph_a)
+        phone_b_raw = signals_b.raw_signals.get("phone_json") or signals_b.raw_signals.get("phone_vis", ph_b)
         if ph_a == ph_b:
             matching.append("phone")
-            evidence["phone_a"] = signals_a.raw_signals.get("phone_json") or signals_a.raw_signals.get("phone_vis", ph_a)
-            evidence["phone_b"] = signals_b.raw_signals.get("phone_json") or signals_b.raw_signals.get("phone_vis", ph_b)
+            evidence["phone_a"] = phone_a_raw
+            evidence["phone_b"] = phone_b_raw
         else:
-            conflicting.append("phone")
-            evidence["phone_a"] = signals_a.raw_signals.get("phone_json") or signals_a.raw_signals.get("phone_vis", ph_a)
-            evidence["phone_b"] = signals_b.raw_signals.get("phone_json") or signals_b.raw_signals.get("phone_vis", ph_b)
+            phone_a_attributable = bool(signals_a.raw_signals.get("phone_json"))
+            phone_b_attributable = bool(signals_b.raw_signals.get("phone_json"))
+            if phone_a_attributable and phone_b_attributable:
+                conflicting.append("phone")
+                evidence["phone_a"] = phone_a_raw
+                evidence["phone_b"] = phone_b_raw
+            else:
+                evidence["phone_skipped"] = (
+                    "phones differ but at least one is only visible-text "
+                    "(not attributable to a named entity); not treated as a conflict"
+                )
 
     # ---- 4. Email-domain comparison ----------------------------------
     em_a = signals_a.email_domain
@@ -647,9 +676,18 @@ def compare_identity(
             evidence["email_domain_a"] = em_a
             evidence["email_domain_b"] = em_b
         else:
-            conflicting.append("email_domain")
-            evidence["email_domain_a"] = em_a
-            evidence["email_domain_b"] = em_b
+            # Same attribution principle as phones.
+            em_a_attributable = bool(signals_a.raw_signals.get("email_json"))
+            em_b_attributable = bool(signals_b.raw_signals.get("email_json"))
+            if em_a_attributable and em_b_attributable:
+                conflicting.append("email_domain")
+                evidence["email_domain_a"] = em_a
+                evidence["email_domain_b"] = em_b
+            else:
+                evidence["email_skipped"] = (
+                    "email domains differ but at least one is only visible-text "
+                    "(not attributable to a named entity); not treated as a conflict"
+                )
 
     # ---- 5. Address / location comparison ----------------------------
     addr_a = signals_a.address
@@ -863,6 +901,77 @@ def _identity_finding(result: IdentityResult, finding_id: str, title: str,
     )
 
 
+def _pair_could_yield_finding(
+    signals_a: IdentitySignals,
+    signals_b: IdentitySignals,
+) -> bool:
+    """Return True only if comparing ``signals_a`` and ``signals_b`` could
+    produce a CONFLICT (ENT-ID-001) or AMBIGUOUS (ENT-ID-002) finding.
+
+    Pairs that can only ever yield MATCH or INSUFFICIENT_EVIDENCE are skipped,
+    eliminating the O(N²) all-pairs comparison without losing any outcome.
+
+    A finding is only possible when the two sources plausibly refer to the
+    same-named entity while a hard signal diverges:
+    * registrable domains differ with similar names            -> AMBIGUOUS
+    * same domain family with similar names and an attributable
+      hard-signal conflict (attributed phone, email, address)  -> CONFLICT/AMBIGUOUS
+    """
+    name_a = signals_a.org_name or signals_a.brand_name
+    name_b = signals_b.org_name or signals_b.brand_name
+    names_present = bool(name_a and name_b)
+    names_similar = names_present and (
+        _names_equivalent(name_a, name_b) or _names_similar(name_a, name_b)
+    )
+    if not names_similar:
+        # Different entities (or absent names) can never produce a finding.
+        return False
+
+    dom_a = signals_a.domain or signals_a.canonical_url
+    dom_b = signals_b.domain or signals_b.canonical_url
+    domains_differ = bool(
+        dom_a and dom_b and dom_a != dom_b
+        and not (dom_b in signals_a.same_as_urls or dom_a in signals_b.same_as_urls)
+    )
+    if domains_differ:
+        # Similar names + different registrable domains -> AMBIGUOUS.
+        return True
+
+    # Same site family: a finding requires a conflicting attributable signal.
+    phones_differ = bool(
+        signals_a.phone
+        and signals_b.phone
+        and signals_a.phone != signals_b.phone
+        and signals_a.raw_signals.get("phone_json")
+        and signals_b.raw_signals.get("phone_json")
+    )
+    if phones_differ:
+        return True
+
+    emails_differ = bool(
+        signals_a.email_domain
+        and signals_b.email_domain
+        and signals_a.email_domain != signals_b.email_domain
+        and signals_a.raw_signals.get("email_json")
+        and signals_b.raw_signals.get("email_json")
+    )
+    if emails_differ:
+        return True
+
+    if signals_a.address and signals_b.address:
+        addr_a, addr_b = signals_a.address, signals_b.address
+        addr_conflict = (
+            addr_a != addr_b
+            and addr_a not in addr_b
+            and addr_b not in addr_a
+            and len(frozenset(addr_a.split()) & frozenset(addr_b.split())) < 2
+        )
+        if addr_conflict:
+            return True
+
+    return False
+
+
 def audit_entity_identity(observations: List[PageObservation]) -> List[Finding]:
     """Run multi-page entity identity analysis and emit Findings.
 
@@ -899,10 +1008,15 @@ def audit_entity_identity(observations: List[PageObservation]) -> List[Finding]:
             continue
         signals.append(extract_identity_signals(obs))
 
-    # Compare every unordered page pair (i < j). The pairwise order follows
+    # Compare candidate pairs. Pairs that can only produce MATCH or
+    # INSUFFICIENT_EVIDENCE are skipped (see _pair_could_yield_finding), which
+    # removes the O(N²) all-pairs blow-up on large crawls without changing
+    # which CONFLICT/AMBIGUOUS outcomes are reported. The pairwise order follows
     # observation order, so output is deterministic for identical input.
     for i in range(len(signals)):
         for j in range(i + 1, len(signals)):
+            if not _pair_could_yield_finding(signals[i], signals[j]):
+                continue
             result = compare_identity(signals[i], signals[j])
             if result.classification == "CONFLICT":
                 findings.append(

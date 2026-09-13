@@ -263,14 +263,14 @@ class TestT4IdsStable(unittest.TestCase):
         return observe_page(page)
 
     def test_internal_canonical_single_instance_stable(self) -> None:
-        obs = _canonical_page("https://x.test/pricing", "https://x.test/pricing?utm=abc")
+        obs = _canonical_page("https://x.test/pricing", "https://x.test/pricing?variant=abc")
         findings = [f for f in audit_t4_indexability(obs) if f.id == "T4-024"]
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].id, "T4-024")
 
     def test_internal_canonical_multi_instance_disambiguated(self) -> None:
-        a = _canonical_page("https://x.test/pricing", "https://x.test/pricing?utm=1")
-        b = _canonical_page("https://x.test/contact", "https://x.test/contact?utm=1")
+        a = _canonical_page("https://x.test/pricing", "https://x.test/pricing?variant=1")
+        b = _canonical_page("https://x.test/contact", "https://x.test/contact?variant=1")
         findings = audit_t4_indexability(a) + audit_t4_indexability(b)
         aggregated = aggregate_findings(findings)
         t4_024 = [f for f in aggregated if f.id.startswith("T4-024")]
@@ -315,8 +315,8 @@ class TestFullAuditRunNoIdCollisions(unittest.TestCase):
 
         _ensure_optional_audits_registered()
         observations = [
-            _canonical_page("https://x.test/pricing", "https://x.test/pricing?utm=1"),
-            _canonical_page("https://x.test/contact", "https://x.test/contact?utm=1"),
+            _canonical_page("https://x.test/pricing", "https://x.test/pricing?variant=1"),
+            _canonical_page("https://x.test/contact", "https://x.test/contact?variant=1"),
         ]
         all_findings = tag_findings(audit_p2_evidence(observations), source_audit="p2_evidence")
         all_findings += tag_findings(audit_entity_identity(observations), source_audit="entity_identity")
@@ -342,8 +342,8 @@ class TestFullAuditRunNoIdCollisions(unittest.TestCase):
                     content_type="text/plain", html_content=b"",
                     is_success=False, error_message="not found",
                 )
-            canonical_href = ("https://x.test/pricing?utm=9"
-                              if url.rstrip("/").endswith("/pricing") else "https://x.test/?utm=9")
+            canonical_href = ("https://x.test/pricing?variant=9"
+                              if url.rstrip("/").endswith("/pricing") else "https://x.test/?variant=9")
             body = (
                 b"<html><head><link rel='canonical' href='" + canonical_href.encode() + b"'/>"
                 b"<title>Acme</title></head><body><h1>Acme</h1>"

@@ -7,12 +7,69 @@ Provides `audit_t4_indexability` which returns a list of `Finding` objects based
 from __future__ import annotations
 
 from typing import List
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from src.audits.domain_utils import registrable_domain
 from src.audits.models import Finding, SuggestedAction
 from src.observation.observation import (
     JsonLdObservation,
     PageObservation,
 )
+
+# Well-known tracking / campaign parameters that do not change the resource
+# identity of a URL. Stripped only for canonical-vs-final *semantic* comparison;
+# the crawler and url_utils normalization are untouched.
+_TRACKING_PARAMS: frozenset[str] = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "gclid", "gclsrc", "dclid", "wbraid", "gbraid", "fbclid",
+    "msclkid", "igshid", "yclid", "ymclid", "mc_cid", "mc_eid",
+    "_ga", "_gl", "_gac", "_gaexp", "_hsenc", "_hsmi",
+    "__hstc", "__hssc", "__hsfp", "hsCtaTracking", "hsLang",
+    "mtm_source", "mtm_medium", "mtm_campaign", "mtm_cid", "mtm_keyword",
+    "pk_source", "pk_medium", "pk_campaign", "pk_cid", "pk_keyword",
+})
+
+
+def _semantic_url(url: str) -> str:
+    """Normalize a URL for semantic comparison (canonical vs final).
+
+    Applies schemeless normalization: default ports are folded, fragments are
+    dropped, trailing slashes are collapsed, and well-known tracking parameters
+    are removed while every other query parameter is preserved (sorted for a
+    deterministic comparison). Host-affinity decisions use registrable-domain
+    comparison separately (see _canonical_findings), so ``www`` vs bare-host
+    variants of the same site are never treated as external.
+
+    Args:
+        url: A URL string.
+
+    Returns:
+        A normalized URL string suitable for equality comparison.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    scheme = (parsed.scheme or "https").lower()
+    host = (parsed.hostname or "").lower()
+    port = parsed.port
+    if port is not None:
+        if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+            netloc = host
+        else:
+            netloc = f"{host}:{port}"
+    else:
+        netloc = host
+    path = parsed.path or "/"
+    if len(path) > 1 and path.endswith("/"):
+        path = path.rstrip("/")
+    query_pairs = [
+        (k, v)
+        for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+        if k not in _TRACKING_PARAMS
+    ]
+    query = urlencode(sorted(query_pairs))
+    return urlunparse((scheme, netloc, path, "", query, ""))
 
 # ---------------------------------------------------------------------------
 # Helper functions for each signal group
@@ -97,6 +154,7 @@ def _indexability_findings(obs: PageObservation) -> List[Finding]:
                 ),
                 priority=3,
                 confidence="high",
+                classification="observation",
             )
         )
     else:
@@ -112,40 +170,47 @@ def _indexability_findings(obs: PageObservation) -> List[Finding]:
                 ),
                 priority=3,
                 confidence="medium",
+                classification="observation",
             )
         )
     return findings
 
 def _robots_findings(obs: PageObservation) -> List[Finding]:
     findings: List[Finding] = []
-    if obs.robots_meta_directives:
+    # The 'none' token means "no directives present", not a directive itself.
+    # Exclude it so T4-010/T4-011 never report an empty/none directive list.
+    meta_directives = [d for d in obs.robots_meta_directives if d != "none"]
+    if meta_directives:
         findings.append(
             Finding(
                 id="T4-010",
                 title="Robots meta directives present",
                 severity="low",
-                evidence=f"Meta directives: {', '.join(obs.robots_meta_directives)}",
+                evidence=f"Meta directives: {', '.join(meta_directives)}",
                 suggested_action=SuggestedAction(
                     summary="Review robots meta directives for intended crawl behaviour.",
                     priority=3,
                 ),
                 priority=3,
                 confidence="high",
+                classification="observation",
             )
         )
-    if obs.x_robots_tag_directives:
+    header_directives = [d for d in obs.x_robots_tag_directives if d != "none"]
+    if header_directives:
         findings.append(
             Finding(
                 id="T4-011",
                 title="X‑Robots‑Tag directives present",
                 severity="low",
-                evidence=f"Header directives: {', '.join(obs.x_robots_tag_directives)}",
+                evidence=f"Header directives: {', '.join(header_directives)}",
                 suggested_action=SuggestedAction(
                     summary="Review X‑Robots‑Tag header for intended crawl behaviour.",
                     priority=3,
                 ),
                 priority=3,
                 confidence="high",
+                classification="observation",
             )
         )
     return findings
@@ -171,17 +236,13 @@ def _canonical_findings(obs: PageObservation) -> List[Finding]:
 
     canonical = obs.canonical_url
     final = obs.final_url
-    # Compare canonical and final URLs ignoring fragments
-    from urllib.parse import urlparse, urlunparse
-    def _strip_fragment(u: str) -> str:
-        try:
-            p = urlparse(u)
-            return urlunparse((p.scheme, p.netloc, p.path, p.params, p.query, ""))
-        except Exception:
-            return u
-    canon_stripped = _strip_fragment(canonical)
-    final_stripped = _strip_fragment(final)
-    if canon_stripped == final_stripped:
+
+    # Semantic comparison: strip tracking params, fragments, collapse
+    # trailing slash, normalize scheme/host.
+    canonical_semantic = _semantic_url(canonical)
+    final_semantic = _semantic_url(final)
+
+    if canonical_semantic == final_semantic:
         findings.append(
             Finding(
                 id="T4-021",
@@ -194,16 +255,16 @@ def _canonical_findings(obs: PageObservation) -> List[Finding]:
                 ),
                 priority=3,
                 confidence="high",
+                classification="observation",
             )
         )
     else:
-        from urllib.parse import urlparse
         try:
-            can_netloc = urlparse(canonical).hostname or ""
-            fin_netloc = urlparse(final).hostname or ""
+            can_host = urlparse(canonical).hostname or ""
+            fin_host = urlparse(final).hostname or ""
         except Exception:
-            can_netloc = fin_netloc = ""
-        if not can_netloc:
+            can_host = fin_host = ""
+        if not can_host:
             findings.append(
                 Finding(
                     id="T4-022",
@@ -218,7 +279,7 @@ def _canonical_findings(obs: PageObservation) -> List[Finding]:
                     confidence="high",
                 )
             )
-        elif can_netloc != fin_netloc:
+        elif registrable_domain(can_host) != registrable_domain(fin_host):
             findings.append(
                 Finding(
                     id="T4-023",
@@ -246,6 +307,7 @@ def _canonical_findings(obs: PageObservation) -> List[Finding]:
                     ),
                     priority=3,
                     confidence="high",
+                    classification="observation",
                 )
             )
     return findings
@@ -266,6 +328,7 @@ def _structured_data_findings(obs: PageObservation) -> List[Finding]:
                 ),
                 priority=3,
                 confidence="medium",
+                classification="observation",
             )
         )
         return findings
@@ -283,6 +346,7 @@ def _structured_data_findings(obs: PageObservation) -> List[Finding]:
             ),
             priority=3,
             confidence="high",
+            classification="observation",
         )
     )
     # Analyze JSON‑LD blocks for @type and @context (detect @context anywhere)
@@ -339,6 +403,7 @@ def _structured_data_findings(obs: PageObservation) -> List[Finding]:
                 ),
                 priority=3,
                 confidence="high",
+                classification="observation",
             )
         )
     if missing_context:
