@@ -9,6 +9,7 @@ This layer records what is on the page without judging quality or correctness.
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass, field
 import json
 import re
@@ -86,6 +87,39 @@ class JsonLdObservation:
 
 
 @dataclass(frozen=True)
+class ComponentObservation:
+    """Observed self-contained content component (structural, domain-agnostic).
+
+    Covers semantic blocks (``<main>``, ``<article>``, ``<section>``,
+    ``<nav>``, ``<header>``, ``<footer>``, ``<aside>``, ``<form>``, ``<ul>``,
+    ``<ol>``) and generic ``<div>`` blocks whose class/id carry content
+    scaffolding keywords (e.g. pricing, plan, product, card). Component
+    recognition is purely structural -- it never depends on a hostname or
+    any particular kind of site.
+
+    Attributes:
+        kind: Component category (e.g. "main", "article", "section",
+            "navigation", "list", "header", "footer", "complementary",
+            "form", "content_component").
+        source_tag: HTML tag of the component element (e.g. "section", "div").
+        source_identifier: Structural locator from the element's id/class
+            attributes (e.g. ``id="pricing" class="card"``), empty if none.
+        heading: Heading text associated with the component (a heading inside
+            the component, or the nearest preceding heading in document order).
+        text: Cleaned visible text of the component, bounded to a maximum
+            length for determinism.
+        page_url: Final (post-redirect) URL of the page the component came from.
+    """
+
+    kind: str
+    source_tag: str
+    source_identifier: str
+    heading: str
+    text: str
+    page_url: str
+
+
+@dataclass(frozen=True)
 class PageSignals:
     """Basic quantitative and presence signals observed on the page.
 
@@ -99,6 +133,7 @@ class PageSignals:
     num_images: int
     num_tables: int
     num_headings: int
+    num_components: int = 0
 
 
 @dataclass(frozen=True)
@@ -190,6 +225,14 @@ class PageObservation:
     og_type: Optional[str] = None
     og_url: Optional[str] = None
 
+    # 10. Twitter Card metadata
+    twitter_title: Optional[str] = None
+    twitter_description: Optional[str] = None
+    twitter_card: Optional[str] = None
+
+    # 11. Generic content components with source provenance (P1 generalization)
+    components: list[ComponentObservation] = field(default_factory=list)
+
     # Convenience properties
     @property
     def has_title(self) -> bool:
@@ -218,6 +261,12 @@ class PageObservation:
     @property
     def num_headings(self) -> int:
         return self.signals.num_headings
+
+    @property
+    def num_components(self) -> int:
+        if self.signals is None:
+            return len(self.components)
+        return self.signals.num_components
 
     @property
     def has_robots_meta(self) -> bool:
@@ -390,12 +439,70 @@ def _extract_headings(soup: BeautifulSoup, tag_name: str) -> list[str]:
     return results
 
 
-def _extract_visible_text(html_content: str) -> str:
-    """Extract human-readable visible text, removing scripts, styles, and templates."""
-    if not html_content:
-        return ""
+def _extract_json_ld(soup: BeautifulSoup) -> list[JsonLdObservation]:
+    """Extract and parse all application/ld+json script blocks."""
+    json_ld_list: list[JsonLdObservation] = []
+    for script_tag in soup.find_all("script"):
+        script_type = (script_tag.get("type") or "").strip().lower()
+        if script_type != "application/ld+json":
+            continue
+
+        raw_script_content = script_tag.string
+        if raw_script_content is None:
+            raw_script_content = script_tag.get_text()
+        raw_text = raw_script_content.strip() if raw_script_content else ""
+
+        if not raw_text:
+            json_ld_list.append(
+                JsonLdObservation(
+                    raw_text="",
+                    parsed_data=None,
+                    is_valid=False,
+                    error_message="Empty JSON-LD block",
+                )
+            )
+            continue
+
+        try:
+            parsed = json.loads(raw_text)
+            json_ld_list.append(
+                JsonLdObservation(
+                    raw_text=raw_text,
+                    parsed_data=parsed,
+                    is_valid=True,
+                    error_message=None,
+                )
+            )
+        except Exception as parse_err:
+            json_ld_list.append(
+                JsonLdObservation(
+                    raw_text=raw_text,
+                    parsed_data=None,
+                    is_valid=False,
+                    error_message=f"JSON decode error: {parse_err}",
+                )
+            )
+    return json_ld_list
+
+
+def _extract_visible_text(html_content: str, soup: Optional[BeautifulSoup] = None) -> str:
+    """Extract human-readable visible text, removing scripts, styles, and templates.
+
+    When a ``soup`` instance is provided it is reused (and mutated) instead of
+    re-parsing ``html_content``, so JSON-LD/component extraction can run first
+    against the unmodified DOM.
+    """
+    if soup is None:
+        if not html_content:
+            return ""
+        try:
+            text_soup = BeautifulSoup(html_content, "html.parser")
+        except Exception:
+            return ""
+    else:
+        text_soup = soup
+
     try:
-        text_soup = BeautifulSoup(html_content, "html.parser")
         for tag in text_soup(["script", "style", "noscript", "template"]):
             tag.decompose()
 
@@ -404,6 +511,174 @@ def _extract_visible_text(html_content: str) -> str:
         return "\n".join(line for line in normalized_lines if line)
     except Exception:
         return ""
+
+
+#: Semantic block tags used for generic component discovery.
+_COMPONENT_TAGS: frozenset[str] = frozenset(
+    {"article", "aside", "header", "footer", "main", "nav", "section"}
+)
+
+#: Structured block tags whose contents are typically self-contained.
+_COMPONENT_STRUCTURED_TAGS: frozenset[str] = frozenset({"form", "ul", "ol"})
+
+#: Map from tag to a domain-agnostic component kind label.
+_COMPONENT_KIND_BY_TAG: dict[str, str] = {
+    "nav": "navigation",
+    "form": "form",
+    "ul": "list",
+    "ol": "list",
+    "article": "article",
+    "aside": "complementary",
+    "header": "header",
+    "footer": "footer",
+    "main": "main",
+    "section": "section",
+}
+
+#: Generic content scaffolding keywords used to recognize component-like
+#: division blocks (pricing cards, product tiles, FAQ panels, ...). These are
+#: structural only and never site/domain specific.
+_COMPONENT_HINT_WORDS: frozenset[str] = frozenset(
+    {
+        "pricing", "price", "plan", "plans", "product", "products", "card",
+        "cards", "tile", "panel", "feature", "features", "faq", "service",
+        "services", "offer", "offers", "package", "packages", "bundle",
+        "item", "listing", "plans", "tier", "tiers", "hero", "spotlight",
+        "comparison", "grid", "catalog", "menu", "details", "summary",
+    }
+)
+
+_MAX_COMPONENTS: int = 200
+_MAX_COMPONENT_TEXT: int = 2000
+_HEADING_TAGS: tuple[str, ...] = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
+def _component_hint_word(element: Any) -> str:
+    """Return the first generic scaffolding keyword found in id/class tokens."""
+    for attr_name in ("id", "class"):
+        attr_value = element.get(attr_name)
+        if attr_value is None:
+            continue
+        tokens: list[str] = []
+        if isinstance(attr_value, list):
+            for token in attr_value:
+                tokens.extend(str(token).split())
+        else:
+            tokens.extend(str(attr_value).split())
+        for token in tokens:
+            for part in re.split(r"[^a-z0-9]+", token.lower()):
+                if part in _COMPONENT_HINT_WORDS:
+                    return part
+    return ""
+
+
+def _component_source_identifier(element: Any) -> str:
+    """Build a structural locator from the element's id/class attributes."""
+    parts: list[str] = []
+    element_id = element.get("id")
+    if element_id:
+        parts.append(f'id="{element_id}"')
+    classes = element.get("class")
+    if classes:
+        class_text = " ".join(classes) if isinstance(classes, list) else str(classes)
+        parts.append(f'class="{class_text}"')
+    return " ".join(parts)
+
+
+def _extract_components(soup: BeautifulSoup, base_url: str) -> list[ComponentObservation]:
+    """Extract self-contained content components with heading provenance.
+
+    Candidate selection is purely structural: semantic block tags plus generic
+    ``<div>`` blocks carrying content-scaffolding keywords in id/class. Nested
+    candidates are collapsed to the outermost component, output is bounded and
+    deterministic, and each component records its nearest preceding heading.
+    """
+    if soup is None:
+        return []
+
+    elements = soup.find_all(True)
+    element_index = {id(element): i for i, element in enumerate(elements)}
+
+    heading_positions: list[int] = []
+    heading_texts: list[str] = []
+    for i, element in enumerate(elements):
+        if element.name in _HEADING_TAGS:
+            cleaned = _clean_text(element.get_text())
+            if cleaned:
+                heading_positions.append(i)
+                heading_texts.append(cleaned)
+
+    def _nearest_heading(element: Any) -> str:
+        inner = element.find(_HEADING_TAGS)
+        if inner is not None:
+            cleaned = _clean_text(inner.get_text())
+            if cleaned:
+                return cleaned
+        position = element_index.get(id(element), -1)
+        idx = bisect.bisect_right(heading_positions, position) - 1
+        if idx >= 0:
+            return heading_texts[idx]
+        return ""
+
+    candidates: list[tuple[Any, str, str]] = []
+    for element in elements:
+        tag_name = (element.name or "").lower()
+        if tag_name in _COMPONENT_KIND_BY_TAG:
+            hint = ""
+        elif tag_name == "div":
+            hint = _component_hint_word(element)
+            if not hint:
+                continue
+        else:
+            continue
+        text = _clean_text(element.get_text())[:_MAX_COMPONENT_TEXT]
+        if not text:
+            continue
+        candidates.append((element, tag_name, hint))
+
+    kept: list[Any] = []
+    observations: list[ComponentObservation] = []
+    # Innermost-first (reverse document order): a container candidate is kept
+    # only when it does not wrap an already-kept, more specific candidate, so
+    # per-card/product components survive instead of being folded into a parent
+    # section. Results are re-reversed to preserve document order.
+    for element, tag_name, _hint in reversed(candidates):
+        if any(kept_elem in element for kept_elem in kept):
+            continue
+        kind = _COMPONENT_KIND_BY_TAG.get(tag_name, "content_component")
+        observations.append(
+            ComponentObservation(
+                kind=kind,
+                source_tag=tag_name,
+                source_identifier=_component_source_identifier(element),
+                heading=_nearest_heading(element),
+                text=_clean_text(element.get_text())[:_MAX_COMPONENT_TEXT],
+                page_url=base_url,
+            )
+        )
+        kept.append(element)
+        if len(kept) >= _MAX_COMPONENTS:
+            break
+    observations.reverse()
+    return observations
+
+
+def _extract_twitter_card(soup: BeautifulSoup) -> dict[str, Optional[str]]:
+    """Extract the three most useful Twitter Card meta fields (name or property)."""
+    result: dict[str, Optional[str]] = {
+        "twitter:title": None,
+        "twitter:description": None,
+        "twitter:card": None,
+    }
+    for meta in soup.find_all("meta"):
+        key = str(meta.get("name") or meta.get("property") or "").strip().lower()
+        if key not in result:
+            continue
+        content = (meta.get("content") or "").strip()
+        if not content:
+            continue
+        result[key] = content
+    return result
 
 
 def observe_page(page: FetchedPage) -> PageObservation:
@@ -531,10 +806,17 @@ def observe_page(page: FetchedPage) -> PageObservation:
     h2 = _extract_headings(soup, "h2")
     h3 = _extract_headings(soup, "h3")
 
-    # 5. Visible text (excludes scripts, styles, noscript, templates)
-    visible_text = _extract_visible_text(page.html_content)
+    # 5. JSON-LD scripts (extracted before visible-text cleanup so the shared
+    #    soup still contains the <script> blocks)
+    json_ld_list = _extract_json_ld(soup)
 
-    # 6. Links
+    # 6. Content components with source provenance (P1 generalization)
+    components = _extract_components(soup, base_url)
+
+    # 7. Visible text (excludes scripts, styles, noscript, templates)
+    visible_text = _extract_visible_text(page.html_content, soup=soup)
+
+    # 8. Links
     links: list[LinkObservation] = []
     for a_tag in soup.find_all("a"):
         raw_href = a_tag.get("href")
@@ -594,50 +876,7 @@ def observe_page(page: FetchedPage) -> PageObservation:
 
         tables.append(TableObservation(headers=headers, rows=rows))
 
-    # 9. JSON-LD scripts
-    json_ld_list: list[JsonLdObservation] = []
-    for script_tag in soup.find_all("script"):
-        script_type = (script_tag.get("type") or "").strip().lower()
-        if script_type != "application/ld+json":
-            continue
-
-        raw_script_content = script_tag.string
-        if raw_script_content is None:
-            raw_script_content = script_tag.get_text()
-        raw_text = raw_script_content.strip() if raw_script_content else ""
-
-        if not raw_text:
-            json_ld_list.append(
-                JsonLdObservation(
-                    raw_text="",
-                    parsed_data=None,
-                    is_valid=False,
-                    error_message="Empty JSON-LD block",
-                )
-            )
-            continue
-
-        try:
-            parsed = json.loads(raw_text)
-            json_ld_list.append(
-                JsonLdObservation(
-                    raw_text=raw_text,
-                    parsed_data=parsed,
-                    is_valid=True,
-                    error_message=None,
-                )
-            )
-        except Exception as parse_err:
-            json_ld_list.append(
-                JsonLdObservation(
-                    raw_text=raw_text,
-                    parsed_data=None,
-                    is_valid=False,
-                    error_message=f"JSON decode error: {parse_err}",
-                )
-            )
-
-    # 10. Quantitative Signals
+    # 9. Quantitative Signals
     signals = PageSignals(
         has_title=title is not None,
         has_meta_description=meta_description is not None,
@@ -646,14 +885,18 @@ def observe_page(page: FetchedPage) -> PageObservation:
         num_images=len(images),
         num_tables=len(tables),
         num_headings=len(h1) + len(h2) + len(h3),
+        num_components=len(components),
     )
 
-    # 11. Robots / indexability metadata (P1-T3)
+    # 10. Robots / indexability metadata (P1-T3)
     robots_meta_raw, robots_meta_directives = _extract_robots_meta(soup)
     x_robots_tag_raw, x_robots_tag_directives = _extract_x_robots_tag(page.response_headers or {})
 
-    # 12. Open Graph metadata (P1-T3)
+    # 11. Open Graph metadata (P1-T3)
     og = _extract_open_graph(soup, base_url)
+
+    # 12. Twitter Card metadata
+    twitter = _extract_twitter_card(soup)
 
     return PageObservation(
         requested_url=page.requested_url,
@@ -683,6 +926,10 @@ def observe_page(page: FetchedPage) -> PageObservation:
         og_description=og.get("og:description"),
         og_type=og.get("og:type"),
         og_url=og.get("og:url"),
+        twitter_title=twitter.get("twitter:title"),
+        twitter_description=twitter.get("twitter:description"),
+        twitter_card=twitter.get("twitter:card"),
+        components=components,
     )
 
 

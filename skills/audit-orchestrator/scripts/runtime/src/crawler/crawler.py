@@ -39,6 +39,38 @@ TEXT_CONTENT_TYPES: tuple[str, ...] = (
     "application/atom+xml",
 )
 
+# Stable machine-readable failure categories for FetchedPage.failure_category.
+FAILURE_CATEGORY_INVALID_URL = "invalid_url"
+FAILURE_CATEGORY_ROBOTS_DENIED = "robots_denied"
+FAILURE_CATEGORY_TIMEOUT = "timeout"
+FAILURE_CATEGORY_SSL_ERROR = "ssl_error"
+FAILURE_CATEGORY_CONNECTION_ERROR = "connection_error"
+FAILURE_CATEGORY_DNS_ERROR = "dns_error"
+FAILURE_CATEGORY_TOO_MANY_REDIRECTS = "too_many_redirects"
+FAILURE_CATEGORY_HTTP_ERROR = "http_error"
+FAILURE_CATEGORY_NON_HTML = "non_html"
+FAILURE_CATEGORY_NON_TEXT = "non_text"
+FAILURE_CATEGORY_RESPONSE_TOO_LARGE = "response_too_large"
+FAILURE_CATEGORY_DECODE_ERROR = "decode_error"
+FAILURE_CATEGORY_UNEXPECTED_ERROR = "unexpected_error"
+
+_DNS_ERROR_HINTS: tuple[str, ...] = (
+    "failed to resolve",
+    "name or service not known",
+    "nodename nor servname",
+    "temporary failure in name resolution",
+    "getaddrinfo failed",
+    "name resolution",
+)
+
+
+def _classify_connection_error(message: str) -> str:
+    """Distinguish DNS resolution failures from other connection errors."""
+    normalized = str(message).lower()
+    if any(hint in normalized for hint in _DNS_ERROR_HINTS):
+        return FAILURE_CATEGORY_DNS_ERROR
+    return FAILURE_CATEGORY_CONNECTION_ERROR
+
 
 @dataclass(frozen=True)
 class FetchedPage:
@@ -55,6 +87,9 @@ class FetchedPage:
         response_headers: Raw response headers (string values) when a response was
             received; empty dict otherwise. Used by the observation layer for
             X-Robots-Tag and other metadata; never required for fetch success.
+        failure_category: Stable, machine-readable failure category when
+            is_success is False (e.g. "dns_error", "timeout", "robots_denied",
+            "http_error", "non_html", "decode_error"), otherwise "".
     """
 
     requested_url: str
@@ -65,6 +100,7 @@ class FetchedPage:
     is_success: bool
     error_message: Optional[str] = None
     response_headers: dict[str, str] = field(default_factory=dict)
+    failure_category: str = ""
 
 
 def _extract_response_headers(response) -> dict[str, str]:
@@ -232,6 +268,7 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message="Invalid URL: URL must be a non-empty string.",
+            failure_category=FAILURE_CATEGORY_INVALID_URL,
         )
 
     clean_url = url.strip()
@@ -246,6 +283,7 @@ def fetch_page(
                 html_content="",
                 is_success=False,
                 error_message=f"Invalid URL: '{clean_url}' must start with http:// or https:// and have a valid host.",
+                failure_category=FAILURE_CATEGORY_INVALID_URL,
             )
     except Exception as err:
         return FetchedPage(
@@ -256,6 +294,7 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message=f"Invalid URL syntax: {err}",
+            failure_category=FAILURE_CATEGORY_INVALID_URL,
         )
 
     headers = {
@@ -275,6 +314,7 @@ def fetch_page(
                 html_content="",
                 is_success=False,
                 error_message=reason or f"Access disallowed by robots.txt for User-Agent '{user_agent}'.",
+                failure_category=FAILURE_CATEGORY_ROBOTS_DENIED,
             )
 
     # 3. Execute read-only HTTP GET
@@ -292,9 +332,10 @@ def fetch_page(
             status_code=None,
             content_type="",
             html_content="",
-            is_success=False,
-            error_message=f"Request timed out after {timeout}s: {err}",
-        )
+is_success=False,
+                error_message=f"Request timed out after {timeout}s: {err}",
+                failure_category=FAILURE_CATEGORY_TIMEOUT,
+            )
     except requests.exceptions.SSLError as err:
         return FetchedPage(
             requested_url=clean_url,
@@ -304,7 +345,8 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message=f"SSL certificate validation failed: {err}",
-        )
+            failure_category=FAILURE_CATEGORY_SSL_ERROR,
+            )
     except requests.exceptions.ConnectionError as err:
         return FetchedPage(
             requested_url=clean_url,
@@ -314,6 +356,7 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message=f"Connection error: {err}",
+            failure_category=_classify_connection_error(str(err)),
         )
     except requests.exceptions.TooManyRedirects as err:
         return FetchedPage(
@@ -324,6 +367,7 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message=f"Too many redirects while following URL chain: {err}",
+            failure_category=FAILURE_CATEGORY_TOO_MANY_REDIRECTS,
         )
     except requests.exceptions.RequestException as err:
         return FetchedPage(
@@ -334,6 +378,7 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message=f"HTTP request failed: {err}",
+            failure_category=FAILURE_CATEGORY_HTTP_ERROR,
         )
     except Exception as err:
         return FetchedPage(
@@ -344,6 +389,7 @@ def fetch_page(
             html_content="",
             is_success=False,
             error_message=f"Unexpected error while fetching URL: {err}",
+            failure_category=FAILURE_CATEGORY_UNEXPECTED_ERROR,
         )
 
     # 3. Process response attributes
@@ -363,6 +409,7 @@ def fetch_page(
             is_success=False,
             error_message=f"HTTP error status {status_code} ({response.reason or 'Unsuccessful'}).",
             response_headers=response_headers,
+            failure_category=FAILURE_CATEGORY_HTTP_ERROR,
         )
 
     # Check for HTML content type
@@ -376,6 +423,7 @@ def fetch_page(
             is_success=False,
             error_message=f"Rejected non-HTML response (Content-Type: '{content_type}').",
             response_headers=response_headers,
+            failure_category=FAILURE_CATEGORY_NON_HTML,
         )
 
     # Check for oversized responses before any decoding work
@@ -392,6 +440,7 @@ def fetch_page(
                 f"(Content-Type: '{content_type}')."
             ),
             response_headers=response_headers,
+            failure_category=FAILURE_CATEGORY_RESPONSE_TOO_LARGE,
         )
 
     # 4. Safely extract decoded text
@@ -407,6 +456,7 @@ def fetch_page(
             is_success=False,
             error_message=f"Failed to decode response content: {err}",
             response_headers=response_headers,
+            failure_category=FAILURE_CATEGORY_DECODE_ERROR,
         )
 
     return FetchedPage(
@@ -451,6 +501,7 @@ def fetch_text(
             html_content="",
             is_success=False,
             error_message="Invalid URL: URL must be a non-empty string.",
+            failure_category=FAILURE_CATEGORY_INVALID_URL,
         )
 
     clean_url = url.strip()
@@ -465,6 +516,7 @@ def fetch_text(
                 html_content="",
                 is_success=False,
                 error_message=f"Invalid URL: '{clean_url}' must start with http:// or https:// and have a valid host.",
+                failure_category=FAILURE_CATEGORY_INVALID_URL,
             )
     except Exception as err:
         return FetchedPage(
@@ -475,6 +527,7 @@ def fetch_text(
             html_content="",
             is_success=False,
             error_message=f"Invalid URL syntax: {err}",
+            failure_category=FAILURE_CATEGORY_INVALID_URL,
         )
 
     headers = {
@@ -496,9 +549,10 @@ def fetch_text(
             status_code=None,
             content_type="",
             html_content="",
-            is_success=False,
-            error_message=f"Request timed out after {timeout}s: {err}",
-        )
+is_success=False,
+                error_message=f"Request timed out after {timeout}s: {err}",
+                failure_category=FAILURE_CATEGORY_TIMEOUT,
+            )
     except requests.exceptions.SSLError as err:
         return FetchedPage(
             requested_url=clean_url,
@@ -508,7 +562,8 @@ def fetch_text(
             html_content="",
             is_success=False,
             error_message=f"SSL certificate validation failed: {err}",
-        )
+            failure_category=FAILURE_CATEGORY_SSL_ERROR,
+            )
     except requests.exceptions.ConnectionError as err:
         return FetchedPage(
             requested_url=clean_url,
@@ -518,6 +573,7 @@ def fetch_text(
             html_content="",
             is_success=False,
             error_message=f"Connection error: {err}",
+            failure_category=_classify_connection_error(str(err)),
         )
     except requests.exceptions.TooManyRedirects as err:
         return FetchedPage(
@@ -528,6 +584,7 @@ def fetch_text(
             html_content="",
             is_success=False,
             error_message=f"Too many redirects while following URL chain: {err}",
+            failure_category=FAILURE_CATEGORY_TOO_MANY_REDIRECTS,
         )
     except requests.exceptions.RequestException as err:
         return FetchedPage(
@@ -538,6 +595,7 @@ def fetch_text(
             html_content="",
             is_success=False,
             error_message=f"HTTP request failed: {err}",
+            failure_category=FAILURE_CATEGORY_HTTP_ERROR,
         )
     except Exception as err:
         return FetchedPage(
@@ -548,6 +606,7 @@ def fetch_text(
             html_content="",
             is_success=False,
             error_message=f"Unexpected error while fetching URL: {err}",
+            failure_category=FAILURE_CATEGORY_UNEXPECTED_ERROR,
         )
 
     final_url = response.url or clean_url
@@ -565,6 +624,7 @@ def fetch_text(
             is_success=False,
             error_message=f"HTTP error status {status_code} ({response.reason or 'Unsuccessful'}).",
             response_headers=response_headers,
+            failure_category=FAILURE_CATEGORY_HTTP_ERROR,
         )
 
     if not _is_text_content_type(content_type):
@@ -577,6 +637,7 @@ def fetch_text(
             is_success=False,
             error_message=f"Rejected non-text response (Content-Type: '{content_type}').",
             response_headers=response_headers,
+            failure_category=FAILURE_CATEGORY_NON_TEXT,
         )
 
     if max_response_bytes is not None and _response_over_limit(response, max_response_bytes):
@@ -589,6 +650,7 @@ def fetch_text(
             is_success=False,
             error_message=f"Response body exceeds the {max_response_bytes}-byte limit.",
             response_headers=response_headers,
+            failure_category=FAILURE_CATEGORY_RESPONSE_TOO_LARGE,
         )
 
     try:
@@ -603,6 +665,7 @@ def fetch_text(
             is_success=False,
             error_message=f"Failed to decode response content: {err}",
             response_headers=response_headers,
+            failure_category=FAILURE_CATEGORY_DECODE_ERROR,
         )
 
     return FetchedPage(
