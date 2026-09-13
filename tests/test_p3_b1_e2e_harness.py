@@ -1078,7 +1078,7 @@ class TestEntrypointOfflinePipeline(unittest.TestCase):
         self.assertTrue(all(f.source_audit == "t4_indexability" for f in result.findings))
         self.assertTrue(all(f.severity == "low" for f in result.findings))
         final = report.as_final_dict()
-        self.assertEqual(final["summary"], {"total_findings": 6, "high": 0, "medium": 0, "low": 6})
+        self.assertEqual(final["summary"], {"total_findings": 6, "high": 0, "medium": 0, "low": 6, "observations": 6})
         self.assertEqual(len(final["findings"]), 6)
         self.assertEqual(final["audits_run"], list(_DEFAULT_AUDITS))
 
@@ -1095,7 +1095,7 @@ class TestEntrypointOfflinePipeline(unittest.TestCase):
         self.assertEqual(sorted(t4_ids), ["T4-005", "T4-020", "T4-030"])
 
         final = report.as_final_dict()
-        self.assertEqual(final["summary"], {"total_findings": 6, "high": 0, "medium": 2, "low": 3, "critical": 1})
+        self.assertEqual(final["summary"], {"total_findings": 6, "high": 0, "medium": 2, "low": 3, "observations": 2, "critical": 1})
         self.assertEqual(len(final["findings"]), final["summary"]["total_findings"])
         for finding in final["findings"]:
             self.assertTrue(finding["evidence"])

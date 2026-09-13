@@ -95,8 +95,14 @@ class TestEntityIdentityAnalysis(unittest.TestCase):
         self.assertIn("org_name_partial", result.matching_signals)
         self.assertIn("domain", result.conflicting_signals)
 
-    def test_ambiguous_same_name_different_phone(self) -> None:
-        """Same name but different phone numbers should be AMBIGUOUS (potential conflict)."""
+    def test_same_name_different_visible_text_phone_is_not_conflict(self) -> None:
+        """Same name but different phone numbers in body text are NOT a conflict.
+
+        Visible-text phones are not attributable to a specific named entity
+        (pages list multiple department/location numbers), so differing free-text
+        phones must never produce AMBIGUOUS. The shared domain + name makes this
+        a MATCH.
+        """
         obs_a = _make_obs(
             url="https://gamma.com",
             title="Gamma Services",
@@ -111,9 +117,9 @@ class TestEntityIdentityAnalysis(unittest.TestCase):
         sig_a = extract_identity_signals(obs_a)
         sig_b = extract_identity_signals(obs_b)
         result = compare_identity(sig_a, sig_b)
-        self.assertEqual(result.classification, "AMBIGUOUS")
+        self.assertEqual(result.classification, "MATCH")
         self.assertIn("org_name_partial", result.matching_signals)
-        self.assertIn("phone", result.conflicting_signals)
+        self.assertNotIn("phone", result.conflicting_signals)
 
     def test_ambiguous_same_name_different_domain_with_relationship(self) -> None:
         """Relationship language (e.g., "branch of") downgrades a conflict to AMBIGUOUS."""

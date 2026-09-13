@@ -132,6 +132,8 @@ class AuditReport:
                     "priority": f.suggested_action.priority,
                 },
             }
+            if getattr(f, "classification", "issue") != "issue":
+                fd["classification"] = f.classification
             if f.details:
                 fd["details"] = f.details
             if has_task_context:
@@ -188,13 +190,18 @@ class AuditReport:
             "medium": 0,
             "low": 0,
         }
+        observations_count = 0
         critical_count = 0
         for f in self.findings:
+            if getattr(f, "classification", "issue") != "issue":
+                observations_count += 1
             severity = getattr(f, "severity", "")
             if severity == "critical":
                 critical_count += 1
             elif severity in summary:
                 summary[severity] += 1
+        if observations_count:
+            summary["observations"] = observations_count
         if critical_count:
             summary["critical"] = critical_count
 
@@ -280,9 +287,12 @@ def _compute_summary(
         Dict with total_findings, severity_counts, audit_status, etc.
     """
     severity_counts: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    observations_count = 0
     for f in findings:
         if f.severity in severity_counts:
             severity_counts[f.severity] += 1
+        if getattr(f, "classification", "issue") != "issue":
+            observations_count += 1
 
     audit_status: dict[str, str] = {}
     for name in audits_run:
@@ -293,6 +303,7 @@ def _compute_summary(
 
     return {
         "total_findings": len(findings),
+        "observations": observations_count,
         "severity_counts": severity_counts,
         "audits_attempted": len(audits_run),
         "audits_succeeded": sum(1 for s in audit_status.values() if s == "completed"),
@@ -366,6 +377,10 @@ def _finding_to_dict(
     source_audit = getattr(finding, "source_audit", "") or ""
     if source_audit:
         finding_dict["source_audit"] = source_audit
+
+    classification = getattr(finding, "classification", "issue") or "issue"
+    if classification != "issue":
+        finding_dict["classification"] = classification
 
     details = getattr(finding, "details", None)
     if details:
