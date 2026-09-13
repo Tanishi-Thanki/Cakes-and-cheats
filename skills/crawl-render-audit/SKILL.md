@@ -9,7 +9,7 @@ description: Evaluates whether technical delivery, accessibility, or rendering c
 >
 > Implemented in the bundled runtime (`skills/audit-orchestrator/scripts/runtime/src/audits/crawl_render.py`) as `audit_crawl_render(obs) -> list[Finding]`
 > and registered in the orchestrator under the stable name `crawl_render` as part of the
-> default six-audit pipeline (callers may also explicitly select a subset via
+> default seven-audit pipeline (callers may also explicitly select a subset via
 > `AuditOptions.audits` / `AuditRequest.audits`).
 
 ## Purpose
