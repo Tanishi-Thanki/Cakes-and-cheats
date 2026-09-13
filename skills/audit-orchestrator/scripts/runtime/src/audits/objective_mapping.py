@@ -58,6 +58,9 @@ FINDING_RULE_OBJECTIVES: dict[str, tuple[str, ...]] = {
     "EVID-AVT-001": ("inventory_verification",),
     "EVID-ENT-001": ("entity_identity",),
     "EVID-ATT-001": ("information_sufficiency", "content_extraction"),
+    # Entity Identity
+    "ENT-ID-001": ("entity_identity",),
+    "ENT-ID-002": ("entity_identity",),
     # Freshness & Corroboration
     "FC-REP-001": ("price_accuracy", "price_evaluation"),
     "FC-REP-002": ("inventory_verification",),

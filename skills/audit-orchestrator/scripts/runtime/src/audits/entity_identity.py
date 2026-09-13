@@ -40,8 +40,9 @@ from __future__ import annotations
 import re
 import urllib.parse
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, List, Literal, Optional
 
+from src.audits.models import Finding, SuggestedAction
 from src.observation.observation import PageObservation
 
 # ---------------------------------------------------------------------------
@@ -820,3 +821,120 @@ def compare_identity(
         conflicting_signals=conflicting,
         supporting_evidence=evidence,
     )
+
+
+# ---------------------------------------------------------------------------
+# Entity Identity Audit – turns pairwise identity analysis into Findings
+# ---------------------------------------------------------------------------
+
+# Stable finding IDs emitted by the entity identity audit.
+ENTITY_CONFLICT_FINDING_ID: str = "ENT-ID-001"
+ENTITY_AMBIGUITY_FINDING_ID: str = "ENT-ID-002"
+
+
+def _identity_finding(result: IdentityResult, finding_id: str, title: str,
+                      severity: str, priority: int, confidence: str,
+                      action_summary: str) -> Finding:
+    """Build a Finding from an IdentityResult with full provenance."""
+    source_a = str(result.supporting_evidence.get("source_a") or "")
+    source_b = str(result.supporting_evidence.get("source_b") or "")
+    evidence = (
+        f"Entity identity comparison across {source_a} and {source_b} yielded "
+        f"{result.classification}: {result.explanation}"
+    )
+    return Finding(
+        id=finding_id,
+        title=title,
+        severity=severity,
+        evidence=evidence,
+        suggested_action=SuggestedAction(
+            summary=action_summary,
+            priority=priority,
+        ),
+        priority=priority,
+        confidence=confidence,
+        details={
+            "classification": result.classification,
+            "source_a": source_a,
+            "source_b": source_b,
+            "matching_signals": sorted(result.matching_signals),
+            "conflicting_signals": sorted(result.conflicting_signals),
+        },
+    )
+
+
+def audit_entity_identity(observations: List[PageObservation]) -> List[Finding]:
+    """Run multi-page entity identity analysis and emit Findings.
+
+    Extracts observable identity signals from every successfully observed page
+    and compares each page pair deterministically. Findings are emitted only for
+    material identity problems:
+
+    * ``CONFLICT`` (``ENT-ID-001``) – pages present similar identity but
+      contradicting hard signals (e.g. conflicting addresses), with no
+      explanatory relationship evidence.
+    * ``AMBIGUOUS`` (``ENT-ID-002``) – pages present split identity evidence
+      (e.g. same name, different phone) that prevents reliable entity
+      resolution.
+
+    ``MATCH`` and ``INSUFFICIENT_EVIDENCE`` results produce no findings –
+    matching entities are correct, and weak evidence is never reported as a
+    defect.
+
+    Matches the P2 evidence audit contract: consumes the complete observation
+    collection produced by the orchestrator and is read-only and deterministic.
+
+    Args:
+        observations: List of crawled PageObservation objects. Items that are
+            None or have is_success False are ignored.
+
+    Returns:
+        List of Finding objects (ENT-ID-001 for conflicts, ENT-ID-002 for
+        ambiguities). Empty list when no material identity problems exist.
+    """
+    findings: List[Finding] = []
+    signals: List[IdentitySignals] = []
+    for obs in observations:
+        if obs is None or not obs.is_success:
+            continue
+        signals.append(extract_identity_signals(obs))
+
+    # Compare every unordered page pair (i < j). The pairwise order follows
+    # observation order, so output is deterministic for identical input.
+    for i in range(len(signals)):
+        for j in range(i + 1, len(signals)):
+            result = compare_identity(signals[i], signals[j])
+            if result.classification == "CONFLICT":
+                findings.append(
+                    _identity_finding(
+                        result=result,
+                        finding_id=ENTITY_CONFLICT_FINDING_ID,
+                        title="Conflicting entity identity across pages",
+                        severity="high",
+                        priority=1,
+                        confidence="high",
+                        action_summary=(
+                            "Reconcile conflicting entity identity signals (name, phone, "
+                            "email or address) across pages so automated systems can "
+                            "resolve the entity unambiguously."
+                        ),
+                    )
+                )
+            elif result.classification == "AMBIGUOUS":
+                findings.append(
+                    _identity_finding(
+                        result=result,
+                        finding_id=ENTITY_AMBIGUITY_FINDING_ID,
+                        title="Potential entity identity ambiguity across pages",
+                        severity="medium",
+                        priority=2,
+                        confidence="medium",
+                        action_summary=(
+                            "Clarify entity identity signals (name, phone, email or "
+                            "address) so the entity can be resolved unambiguously by "
+                            "automated systems."
+                        ),
+                    )
+                )
+
+    return findings

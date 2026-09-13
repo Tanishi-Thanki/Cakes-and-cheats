@@ -53,15 +53,20 @@ URL / AuditRequest
 
 ## Output Schema
 
-Both `run_audit` and `run_audit_full` default to all six specialist audits.
+Both `run_audit` and `run_audit_full` default to all seven specialist audits.
 `run_audit` returns an `AuditResult`; `run_audit_full` is the designated complete marketplace entrypoint
 returning `(AuditResult, AuditReport)`. It adds objective mapping, priority engine, and structured
 reporting on top of the `run_audit` result.
 
 Default audit set (`_DEFAULT_AUDITS`):
 ```
-machine_answerability, task_readiness, crawl_render, engagement, evidence_consistency, freshness_corroboration
+machine_answerability, task_readiness, crawl_render, engagement, evidence_consistency, freshness_corroboration, t4_indexability
 ```
+In addition, two multi-page analysis layers always run on the complete observation
+collection: the P2 evidence audit (`audit_p2_evidence`, findings tagged
+`p2_evidence`) and the entity identity audit (`audit_entity_identity`, findings
+tagged `entity_identity`). They are not per-page specialist audits and are not
+part of `_DEFAULT_AUDITS` / `audits_run`.
 Explicit audit selection (via `AuditRequest.audits` or `AuditOptions.audits`) overrides the default.
 
 The report serializes to:
@@ -87,7 +92,8 @@ The report serializes to:
     "crawl_render",
     "engagement",
     "evidence_consistency",
-    "freshness_corroboration"
+    "freshness_corroboration",
+    "t4_indexability"
   ],
   "findings": [
     {
