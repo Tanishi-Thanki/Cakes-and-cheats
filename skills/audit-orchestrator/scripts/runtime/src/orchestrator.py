@@ -6,6 +6,7 @@ Composes the existing reusable Agent Skills into one deterministic audit pipelin
      ↓ fetch_page()          (crawler — one HTTP GET, read-only)
      ↓ observe_page()        (observation — one HTML parse, no network)
      ↓ audit_*(obs)          (each registered audit receives the SAME PageObservation)
+     ↓ audit_*(observations) (P2 evidence + entity identity run on the full collection)
      ↓ source-tag findings   (each finding tagged with its originating audit)
      ↓ aggregate + deduplicate + sort
      ↓ AuditResult
@@ -39,6 +40,7 @@ from src.audits.finding_aggregator import (
     sort_findings,
     tag_findings,
 )
+from src.audits.entity_identity import audit_entity_identity
 from src.audits.machine_answerability import audit_machine_answerability
 from src.audits.models import Finding
 from src.audits.objective_mapping import map_findings_to_objectives
@@ -446,6 +448,14 @@ def run_audit(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Audit 'p2_evidence' raised an unexpected exception: %s", exc)
         audit_errors["p2_evidence"] = str(exc)
+
+    # Entity identity analysis runs on the complete observation collection
+    try:
+        identity_findings = audit_entity_identity(observations)
+        all_findings.extend(tag_findings(identity_findings, source_audit="entity_identity"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Audit 'entity_identity' raised an unexpected exception: %s", exc)
+        audit_errors["entity_identity"] = str(exc)
 
     # Specialist audits run per-observation
     for name in audit_names:

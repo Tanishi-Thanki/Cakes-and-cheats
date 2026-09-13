@@ -395,7 +395,9 @@ def crawl_site(
             fetched = fetcher(url, config.timeout_seconds, config.user_agent, config.check_robots)
         except Exception as exc:
             # A raising fetcher must never escape the crawl boundary: convert
-            # it into a structured per-page failure and continue.
+            # it into a structured per-page failure and continue. The category
+            # is left to the message classifier so the legacy "fetch_exception"
+            # errors dict contract is preserved.
             fetched = FetchedPage(
                 requested_url=url,
                 final_url="",
@@ -419,7 +421,7 @@ def crawl_site(
                     discovery_sources=tuple(sorted(sources_by_url.get(url, ()))),
                 )
             )
-            category = _classify_error(error_message)
+            category = fetched.failure_category or _classify_error(error_message)
             error_counts[category] = error_counts.get(category, 0) + 1
             if len(error_samples) < MAX_ERROR_SAMPLES:
                 error_samples.append(f"{url}: {error_message}")

@@ -6,11 +6,13 @@ objects.  It deliberately does **not** modify the existing marketplace
 orchestrator – P2 is offered as an optional, independent entry point.
 
 The audit builds a :class:`SiteEvidenceInventory` from the observations, then
-examines each aggregated fact.  For any fact whose ``cross_page_status`` indicates
-a material issue (e.g. ``CONFLICT``, ``HISTORICAL`` …) a corresponding
-:class:`Finding` is emitted.  Findings retain full provenance via the
-``evidence`` field, which contains a concise description of the conflicting
-sources.
+examines each aggregated fact.  Only a genuine value contradiction
+(``cross_page_status == CONFLICT``) produces a :class:`Finding`.  Evidence
+states such as ``AMBIGUOUS``, ``INSUFFICIENT_EVIDENCE``, and the temporal
+classifications (``HISTORICAL``, ``EXPIRED``, ``FUTURE``) describe uncertainty
+about a signal — they are never converted into defects.  Findings retain full
+provenance via the ``evidence`` field, which contains a concise description of
+the conflicting sources.
 
 The implementation re‑uses the data‑models defined in ``src.audits.models``
 and the inventory utilities in ``src.audits.fact_inventory``.
@@ -29,11 +31,18 @@ from src.observation.observation import PageObservation
 # ---------------------------------------------------------------------------
 
 def _fact_to_finding(fact: AggregatedFact) -> Finding | None:
-    """Create a :class:`Finding` for a fact with a non‑MATCH status.
+    """Create a :class:`Finding` only for a genuine evidence contradiction.
 
-    The function maps the ``cross_page_status`` to a human‑readable title and a
-    stable identifier.  The ``evidence`` string summarises the conflicting
-    values and URLs.
+    A fact is a defect only when its ``cross_page_status`` is ``CONFLICT``,
+    meaning multiple distinct concrete values were observed for the same
+    (entity, attribute) in the current timeframe.
+
+    ``AMBIGUOUS`` (values could not be confidently compared),
+    ``INSUFFICIENT_EVIDENCE`` (too few sources), and the temporal states
+    ``HISTORICAL`` / ``EXPIRED`` / ``FUTURE`` describe uncertainty about the
+    evidence rather than a violation; reporting them as findings would turn
+    missing or uncomparable signals into defects. ``MATCH`` and ``SINGLE_PAGE``
+    are likewise non-issues.
     """
     status = fact.cross_page_status
     # We only emit findings for material issues. Ambiguous or under-evidenced
@@ -102,8 +111,9 @@ def audit_p2_evidence(observations: List[PageObservation]) -> List[Finding]:
     Returns
     -------
     List[Finding]
-        Findings representing material cross‑page inconsistencies, identity
-        ambiguities, temporal issues, and insufficient evidence.
+        Findings for genuine cross-page value contradictions only. Ambiguous,
+        insufficient, unknown, and temporally-differentiated evidence never
+        produces a finding — uncertainty is not a defect.
     """
     # Build a site‑wide inventory, safely handling empty or malformed input.
     inventory = SiteEvidenceInventory.from_page_observations(observations)
