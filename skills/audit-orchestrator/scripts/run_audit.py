@@ -177,7 +177,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.output_file.write_text(report_json, encoding="utf-8")
         print(f"Audit report saved to {args.output_file}", file=sys.stderr)
     else:
-        print(report_json)
+        try:
+            print(report_json)
+        except UnicodeEncodeError:
+            sys.stdout.buffer.write(report_json.encode("utf-8") + b"\n")
 
     return 0 if result.is_success else 1
 
